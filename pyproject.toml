@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pydebounce"
+name = "throttlebounce"
 version = "0.1.0"
 description = "Small, typed, zero-dependency sync debounce and throttle decorators with an injectable clock"
 readme = "README.md"
@@ -25,14 +25,14 @@ dev = ["ruff", "mypy", "pytest", "build", "twine"]
 
 [project.urls]
 Homepage = "https://lianes8studio.com"
-Repository = "https://github.com/JaviLianes8/pydebounce"
-Issues = "https://github.com/JaviLianes8/pydebounce/issues"
-Changelog = "https://github.com/JaviLianes8/pydebounce/blob/main/CHANGELOG.md"
+Repository = "https://github.com/JaviLianes8/throttlebounce"
+Issues = "https://github.com/JaviLianes8/throttlebounce/issues"
+Changelog = "https://github.com/JaviLianes8/throttlebounce/blob/main/CHANGELOG.md"
 LinkedIn = "https://www.linkedin.com/in/jlianes/"
 Funding = "https://buymeacoffee.com/jlianesglrs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pydebounce"]
+packages = ["src/throttlebounce"]
 
 [tool.ruff]
 line-length = 100

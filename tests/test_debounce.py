@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
-from pydebounce import debounce
+from throttlebounce import debounce
 
 
 class FakeTimer:
