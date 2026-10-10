@@ -1,17 +1,17 @@
-# debounce
+# pydebounce
 
 Small, typed, zero-dependency sync debounce and throttle decorators with an injectable clock.
 
 ## Install
 
 ```
-pip install debounce
+pip install pydebounce
 ```
 
 ## Usage
 
 ```python
-from debounce import debounce, throttle
+from pydebounce import debounce, throttle
 
 
 @debounce(0.3)

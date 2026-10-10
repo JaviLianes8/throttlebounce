@@ -3,8 +3,8 @@
 $ErrorActionPreference = "Stop"
 
 try {
-    Invoke-WebRequest -UseBasicParsing "https://pypi.org/pypi/debounce/json" | Out-Null
-    throw "The name 'debounce' already exists on PyPI. Choose another before publishing."
+    Invoke-WebRequest -UseBasicParsing "https://pypi.org/pypi/pydebounce/json" | Out-Null
+    throw "The name 'pydebounce' already exists on PyPI. Choose another before publishing."
 } catch [System.Net.WebException], [Microsoft.PowerShell.Commands.HttpResponseException] {
     if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
 }

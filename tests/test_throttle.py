@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from debounce import throttle
+from pydebounce import throttle
 
 
 class FakeClock:
