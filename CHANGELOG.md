@@ -8,4 +8,5 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.1.0]
 
-- First release.
+- First release: `debounce` and `throttle` decorators, thread-safe, with an
+  injectable clock and timer so tests never wait on real time.
