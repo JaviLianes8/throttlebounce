@@ -1,7 +1,8 @@
 # Local quality gate. Run before every commit. No CI runs in the cloud.
 $ErrorActionPreference = "Stop"
 
-ruff format --check src tests
-ruff check src tests
-mypy src tests
+ruff format --check .
+ruff check .
+mypy --strict src
+mypy tests
 pytest
