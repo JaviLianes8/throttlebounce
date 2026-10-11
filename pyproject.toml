@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "throttlebounce"
-version = "0.1.0"
-description = "Small, typed, zero-dependency sync debounce and throttle decorators with an injectable clock"
+version = "0.2.0"
+description = "Small, typed, zero-dependency debounce and throttle decorators, sync and async, with injectable time"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -22,6 +22,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest", "build", "twine"]
+
+[project.scripts]
+throttlebounce = "throttlebounce._cli:main"
 
 [project.urls]
 Homepage = "https://lianes8studio.com"
