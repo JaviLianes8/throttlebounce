@@ -2,42 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import pytest
+from _fakes import TimerSpy
 
 from throttlebounce import debounce
-
-
-class FakeTimer:
-    """A one-shot timer that fires only when the test tells it to."""
-
-    def __init__(self, delay: float, action: Callable[[], None]) -> None:
-        self.delay = delay
-        self.action = action
-        self.cancelled = False
-
-    def start(self) -> None:
-        pass
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def fire(self) -> None:
-        if not self.cancelled:
-            self.action()
-
-
-class TimerSpy:
-    """Records every timer it builds so a test can fire the live one."""
-
-    def __init__(self) -> None:
-        self.timers: list[FakeTimer] = []
-
-    def __call__(self, delay: float, action: Callable[[], None]) -> FakeTimer:
-        timer = FakeTimer(delay, action)
-        self.timers.append(timer)
-        return timer
 
 
 def test_rapid_calls_collapse_into_one_run_with_the_last_arguments() -> None:
@@ -121,3 +89,92 @@ def test_flush_with_nothing_pending_returns_none() -> None:
 def test_a_negative_wait_is_rejected() -> None:
     with pytest.raises(ValueError):
         debounce(-1.0)
+
+
+def test_leading_edge_fires_on_the_first_call_of_a_burst() -> None:
+    spy = TimerSpy()
+    seen: list[int] = []
+
+    @debounce(0.5, leading=True, trailing=False, timer_factory=spy)
+    def record(value: int) -> None:
+        seen.append(value)
+
+    record(1)
+    assert seen == [1]
+    record(2)
+    record(3)
+    assert seen == [1]
+    spy.timers[-1].fire()
+    assert seen == [1]
+    record(4)
+    assert seen == [1, 4]
+
+
+def test_both_edges_run_leading_then_trailing_only_when_more_than_one_call() -> None:
+    spy = TimerSpy()
+    seen: list[int] = []
+
+    @debounce(0.5, leading=True, trailing=True, timer_factory=spy)
+    def record(value: int) -> None:
+        seen.append(value)
+
+    record(1)
+    record(2)
+    record(3)
+    assert seen == [1]
+    spy.timers[-1].fire()
+    assert seen == [1, 3]
+
+
+def test_both_edges_with_a_lone_call_does_not_run_trailing() -> None:
+    spy = TimerSpy()
+    seen: list[int] = []
+
+    @debounce(0.5, leading=True, trailing=True, timer_factory=spy)
+    def record(value: int) -> None:
+        seen.append(value)
+
+    record(1)
+    assert seen == [1]
+    spy.timers[-1].fire()
+    assert seen == [1]
+
+
+def test_max_wait_forces_a_run_during_an_unbroken_burst() -> None:
+    spy = TimerSpy()
+    seen: list[int] = []
+
+    @debounce(0.5, max_wait=1.0, timer_factory=spy)
+    def record(value: int) -> None:
+        seen.append(value)
+
+    record(1)
+    assert spy.timers[1].delay == 1.0
+    record(2)
+    record(3)
+    assert seen == []
+    spy.timers[1].fire()
+    assert seen == [3]
+
+
+def test_result_exposes_the_last_value_without_forcing_a_run() -> None:
+    spy = TimerSpy()
+
+    @debounce(0.5, timer_factory=spy)
+    def double(value: int) -> int:
+        return value * 2
+
+    assert double.result is None
+    double(21)
+    spy.timers[-1].fire()
+    assert double.result == 42
+
+
+def test_both_edges_off_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        debounce(0.5, leading=False, trailing=False)
+
+
+def test_a_negative_max_wait_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        debounce(0.5, max_wait=-1.0)
