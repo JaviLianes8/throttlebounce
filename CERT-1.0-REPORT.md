@@ -61,7 +61,7 @@ the same virtual clock:
   throttle (both trailing settings), lodash's debounce without `maxWait` or with
   `maxWait` at least twice `wait`, and lodash's throttle without a trailing edge.
 - The other 208 are lodash's throttle with a trailing edge and lodash's debounce with
-  `maxWait` under twice `wait`. 166 match; the 42 that differ are pinned: at the first
+  `maxWait` under twice `wait`. 160 match; the 48 that differ (39 throttles, 9 debounces) are pinned: at the first
   run that differs, either lodash ran inside the interval of the previous run, or
   throttlebounce ran exactly at the deadline and lodash later. Reading lodash's source
   explains both: after a deadline run lodash restarts its timer with the full `wait` at
@@ -95,7 +95,7 @@ Kept on purpose: throttle defaults to `trailing=False` (0.1.0 behaviour) and has
 ## Errors, typing, docs (items 2 to 5)
 
 - `__all__` lists the eleven public names; `tests/test_contract.py` pins it.
-- Every public name has a docstring with a doctest (20 doctests, run by `pytest` through
+- Every public name has a docstring with a doctest (11 doctests, run by `pytest` through
   `--doctest-modules`). Every Python example and console transcript in README and GUIDE
   runs in `tests/test_docs.py`.
 - `mypy --strict src tests` clean; `py.typed` shipped; no `Any` in the public signatures
