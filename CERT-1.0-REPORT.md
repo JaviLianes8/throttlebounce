@@ -106,7 +106,9 @@ Kept on purpose: throttle defaults to `trailing=False` (0.1.0 behaviour) and has
 
 ## Contracts, fuzz and mutations (items 6, 9, 18)
 
-Contracts: `test_contract*.py` (API, edges, timers, methods, async), `test_oracle.py`,
+Contracts: `test_contract*.py` (API, edges, timers, methods, async, and the two files
+added after the blind mutation round), `test_typing.py` (a strict type-checked client),
+`test_oracle.py`,
 `test_real_time.py` (default timers and loop, with waits that never race), `test_cli.py`,
 `test_e2e_cli.py`, `test_docs.py`. `test_fuzz.py`: 300 seeded plans of calls, `flush`,
 `cancel` and `reset` where the sync and async wrappers must agree run for run, every run
