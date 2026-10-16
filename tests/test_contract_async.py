@@ -37,10 +37,12 @@ def test_calls_outside_a_running_loop_raise_and_change_nothing() -> None:
 
 
 def test_a_failing_timed_run_goes_to_the_loop_exception_handler() -> None:
-    async def main() -> list[BaseException]:
-        caught: list[BaseException] = []
+    async def main() -> list[tuple[str, type[BaseException]]]:
+        caught: list[tuple[str, type[BaseException]]] = []
         loop = asyncio.get_running_loop()
-        loop.set_exception_handler(lambda _, context: caught.append(context["exception"]))
+        loop.set_exception_handler(
+            lambda _, context: caught.append((context["message"], type(context["exception"])))
+        )
         scheduler = FakeScheduler()
 
         @async_debounce(1, scheduler=scheduler)
@@ -53,8 +55,7 @@ def test_a_failing_timed_run_goes_to_the_loop_exception_handler() -> None:
             await asyncio.sleep(0)
         return caught
 
-    caught = asyncio.run(main())
-    assert [type(error) for error in caught] == [KeyError]
+    assert asyncio.run(main()) == [("throttlebounce run failed", KeyError)]
 
 
 def test_a_spawned_run_survives_garbage_collection_until_it_finishes() -> None:
