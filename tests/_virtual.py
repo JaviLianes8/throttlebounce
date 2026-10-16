@@ -47,8 +47,15 @@ class VirtualTime:
         return timer
 
     def push(self, timer: VirtualTimer) -> None:
+        if len(self._queue) > 64:  # drop cancelled entries so long runs stay cheap
+            self._queue = [entry for entry in self._queue if entry[2].live]
+            heapq.heapify(self._queue)
         heapq.heappush(self._queue, (self.now + timer.delay, self._sequence, timer))
         self._sequence += 1
+
+    def queued(self) -> int:
+        """How many timers are live (started and neither fired nor cancelled)."""
+        return sum(1 for _, _, timer in self._queue if timer.live)
 
     def next_due(self) -> float:
         return self._queue[0][0] if self._queue else float("inf")
