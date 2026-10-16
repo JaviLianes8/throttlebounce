@@ -142,7 +142,7 @@ def test_attributes_of_the_function_never_hide_the_wrapper_methods() -> None:
     for name in ("cancel", "flush", "reset", "pending", "_run", "_attr_name", "_edges"):
         setattr(job, name, "hidden")
     job.tag = "kept"  # type: ignore[attr-defined]
-    job.__dict__[1] = "a key that is not a name"
+    job.__dict__[1] = "a key that is not a name"  # type: ignore[index]
     spy = TimerSpy()
     deb = debounce(1, timer_factory=spy)(job)
     deb(1)
