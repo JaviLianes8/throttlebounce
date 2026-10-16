@@ -125,8 +125,8 @@ assert (a.saved, b.saved) == (["one"], ["two"])
 
 ## Testing without real time
 
-Pass a `clock` to the throttles, a `timer_factory` to `debounce` and a `scheduler`
-to the async pair, and drive time by hand:
+Pass a `clock` to the throttles, a `timer_factory` to `debounce` and
+`throttle(trailing=True)`, and a `scheduler` to the async pair, and drive time by hand:
 
 ```python
 from throttlebounce import throttle

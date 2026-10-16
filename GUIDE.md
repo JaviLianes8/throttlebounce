@@ -148,9 +148,13 @@ built.
 
 `async_debounce` and `async_throttle` take the same options and run each call as a
 task on the running event loop, with no threads. Call the wrappers from the loop's
-thread while it runs. `flush()` is a coroutine that awaits the run; `result` is the
-value of the most recently finished run. The wrappers keep a reference to every task
-until it finishes, so a run is never garbage-collected halfway.
+thread while it runs; a call with no running loop raises `RuntimeError` and changes
+nothing. `flush()` is a coroutine that awaits the run and raises what it raises;
+`result` is the value of the most recently finished run. A run started by an edge or a
+deadline has nobody awaiting it, so if it raises, the exception goes to the loop's
+exception handler (`loop.set_exception_handler`), the async counterpart of
+`threading.excepthook`. The wrappers keep a reference to every task until it finishes,
+so a run is never garbage-collected halfway.
 
 ```python
 import asyncio
@@ -263,7 +267,10 @@ when nothing is pending; `max_wait` below `wait` is refused instead of raised to
 
 ## Upgrading from 0.1.0
 
-Code written for 0.1.0 keeps working: same names, same defaults, same results. New
+Code that uses the decorators keeps working: same names, same defaults, same results.
+One break: the classes `Debounced` and `Throttled`, when built directly, now take
+everything after the duration by keyword (`Debounced(func, 0.5, timer_factory=f)`,
+`Throttled(func, 1.0, clock=c)`); 0.1.0 also accepted that third argument by position. New
 since then: the `leading`, `trailing` and `max_wait` options, `trailing` on throttle,
 `flush`, `cancel`, `pending` and `result` on every wrapper, the async decorators, the
 command line and per-instance methods. Durations are now checked when the decorator is

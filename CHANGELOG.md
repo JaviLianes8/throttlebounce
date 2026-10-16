@@ -12,7 +12,12 @@ The public API is now stable: `debounce`, `throttle`, `async_debounce`,
 `async_throttle`, their wrapper classes `Debounced`, `Throttled`, `AsyncDebounced` and
 `AsyncThrottled` (`flush`, `cancel`, `pending`, `result`, and `reset` on throttles),
 and the injectable `Clock`, `TimerFactory` and `Scheduler`. Names, signatures and
-defaults will not change before 2.0. Upgrading from 0.1.0 needs no code change.
+defaults will not change before 2.0. Code that uses the decorators upgrades from 0.1.0
+with no change.
+
+Breaking against 0.1.0: `Debounced` and `Throttled` built directly take
+`timer_factory` and `clock` by keyword only (0.1.0 also took them as the third
+positional argument).
 
 Changed since 0.2.0 (which was never published to PyPI):
 
@@ -31,6 +36,10 @@ Changed since 0.2.0 (which was never published to PyPI):
 - Attributes of the wrapped callable can no longer overwrite the wrapper's state.
 - `Clock`, `TimerFactory` and `Scheduler` are callback protocols with documented
   call signatures; public names report `throttlebounce` as their module.
+- The async wrappers raise `RuntimeError` before changing any state when no event loop
+  is running, on every Python version, and report a failing timed run through the
+  loop's exception handler.
+- Decorated methods keep their argument types for type checkers.
 - Command line: the exit status is that of the last run (0 if none, 127 if the command
   cannot start, 130 on Ctrl+C), runs never overlap, a pending run happens before exit,
   and bad values give a usage error instead of a traceback.
