@@ -1,5 +1,7 @@
 # throttlebounce
 
+[![Lianes8 Certified](https://lianes8studio.com/certified/lianes8-certified-badge.svg)](https://lianes8studio.com/certified)
+
 Typed, zero-dependency debounce and throttle decorators for Python, sync and async,
 with the edge semantics of lodash and Underscore and injectable time, so your tests
 never sleep.

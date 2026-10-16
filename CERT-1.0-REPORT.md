@@ -10,9 +10,36 @@ Progress:
 - [x] Docs: README, GUIDE, CHANGELOG (items 11, 12)
 - [x] Packaging, e2e and upgrade from PyPI 0.1.0 (items 8, 10, 13, 14), author run
 - [x] Five QA lenses report PASS (item 19)
-- [ ] Independent reviewer reports PASS (item 16)
-- [ ] Gates (item 15), final run
-- [ ] PR and trace guard CLEAN (item 17); merge and publish left to the maintainer
+- [x] Independent reviewer reports PASS (item 16)
+- [x] Gates (item 15), final run
+- [x] PR #2 and trace guard CLEAN (item 17); merge and publish left to the maintainer
+
+## Scorecard
+
+Independent review (item 16), round 2 at 64d0866; the commits after it touch only this
+report and the README badge.
+
+| # | Item | Result |
+| --- | --- | --- |
+| 1 | Public API reviewed for stability | PASS: the 0.1.0 decorators keep their names, signatures, defaults and results; one documented break when the classes are built directly |
+| 2 | `__all__` exact, no private imports in docs | PASS: 11 names |
+| 3 | Docstrings with runnable examples, doctests | PASS: 11 doctests; every README and GUIDE example and transcript runs as a test |
+| 4 | Typed end to end | PASS: `mypy --strict src tests` clean, `py.typed` shipped, a strict client test keeps method signatures |
+| 5 | Typed, documented, bounded errors | PASS: `TypeError` and `ValueError` under 80 characters, never echoing the value |
+| 6 | Contract tests of every public name | PASS |
+| 7 | Real ground truth | PASS: lodash 4.18.1 and Underscore 1.13.8 run live, 1200 recorded scenarios; lens b 8,406 more with its own harness |
+| 8 | Real e2e from the wheel | PASS: console script by subprocess, sabotage caught, upgrade from PyPI 0.1.0 |
+| 9 | Seeded fuzz, no crash, hang or blowup | PASS |
+| 10 | Supported Pythons | PASS: CPython 3.10.19, 3.11.5, 3.12.12, 3.13.2, 3.14.2 and 3.14.2 free-threaded |
+| 11 | README and `twine check` | PASS |
+| 12 | Dated CHANGELOG 1.0.0 section | PASS |
+| 13 | pyproject 1.0.0, Production/Stable | PASS |
+| 14 | sdist and wheel contents | PASS |
+| 15 | Gates each exit 0 | PASS: each alone on a fresh clone at 64d0866 (528 passed, 1 skipped: the live oracle without Node) |
+| 16 | Independent reviewer | PASS: round 1 FAIL at 49b90cb, round 2 PASS at 64d0866 |
+| 17 | PR and trace guard | PR #2, trace guard CLEAN; merge and publish left to the maintainer |
+| 18 | Contracts bite (mutations) | PASS: author 48, blind lens e 125, reviewer 40; every non-equivalent survivor killed by a contract |
+| 19 | Five independent QA lenses | PASS: a round 2, b round 2, c round 3, d round 1, e round 2 |
 
 ## Baseline on 0.2.0 (before any change)
 
@@ -221,3 +248,15 @@ quiet timer fires or after `end()` (the quiet timer is gone, so the next call op
 burst and resets it); a fired deadline slot left set (the later `cancel()` of a fired
 one-shot timer does nothing); throttle `pending` read from "timer is set" (they change
 together); the `bool()` normalisation of the edge flags.
+
+## Independent review (item 16)
+
+| Round | Head | Verdict | Findings and outcome |
+| --- | --- | --- | --- |
+| 1 | 49b90cb | FAIL (items 16, 18) | gates alone on a fresh clone, live Node rerun of all 1200 scenarios, six-interpreter wheel runs and the PyPI 0.1.0 upgrade all passed; report counts confirmed; its own 40 mutations: 37 killed, 2 killed only by a hang (a trailing timer per skipped call; the CLI without its final flush), 1 equivalent, 1 missing contract (a `TypeError` message echoing the value), pinned in 5d0c215 and 64d0866 |
+| 2 | 64d0866 | PASS | the survivor killed by `test_contract_api::test_a_duration_that_is_not_a_real_number_is_a_type_error`; gates each exit 0 alone on a fresh clone |
+
+Noted and kept: during the reviewer's sweep, `test_e2e_cli`'s version check failed once
+and passed on every rerun; the fixture installs the checkout with pip, which needs the
+network. Two mutants are caught by a hang rather than an assertion; the suite has no
+per-test timeout plugin, and the runs used an outer timeout.
