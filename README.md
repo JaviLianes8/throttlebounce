@@ -69,7 +69,8 @@ thread-safe, and the wrapped function always runs outside their lock.
 These rules are checked against lodash 4.18.1 and Underscore 1.13.8 on 1200 seeded
 call patterns, run live on a virtual clock. On plain calls the only differences are
 two places where lodash runs a call later than its own deadline, or twice inside one
-throttle interval; `flush()` and `cancel()` also differ slightly by design. The [guide](https://github.com/JaviLianes8/throttlebounce/blob/main/GUIDE.md#differences-from-lodash)
+throttle interval; `flush()` and `cancel()` also differ by design. The
+[guide](https://github.com/JaviLianes8/throttlebounce/blob/main/GUIDE.md#differences-from-lodash)
 has the details.
 
 ## Async
