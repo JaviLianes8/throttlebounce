@@ -8,6 +8,7 @@ that fires after it was replaced or cancelled is recognised as stale and ignored
 from __future__ import annotations
 
 import functools
+import math
 from collections.abc import Callable
 from typing import Generic, Protocol, TypeVar
 
@@ -28,6 +29,11 @@ class _Slot:
 
     def __init__(self, new_timer: NewTimer, delay: float, fire: Callable[[_Slot], None]) -> None:
         self.handle = new_timer(delay, functools.partial(fire, self))
+
+
+def _finite(now: float) -> float | None:
+    # A reading that is not finite cannot open a window: the next call runs.
+    return now if math.isfinite(now) else None
 
 
 def _stop(slot: _Slot | None) -> None:
@@ -150,9 +156,9 @@ class ThrottleEdges(Generic[_C]):
 
     def call(self, call: _C, now: float) -> _C | None:
         elapsed = None if self._last is None else now - self._last
-        # A clock that went backwards is treated as a closed window, never a stuck one.
-        if elapsed is None or elapsed >= self._interval or elapsed < 0:
-            self._last = now
+        # A clock that went backwards or read NaN closes the window, never sticks it.
+        if elapsed is None or not 0 <= elapsed < self._interval:
+            self._last = _finite(now)
             self.cancel()
             return call
         if self._trailing:
@@ -176,7 +182,7 @@ class ThrottleEdges(Generic[_C]):
         run = self._pending
         self._pending = None
         if run is not None:
-            self._last = now
+            self._last = _finite(now)
         return run
 
     def cancel(self) -> None:

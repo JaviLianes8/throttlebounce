@@ -7,7 +7,7 @@ import functools
 from collections.abc import Awaitable, Callable
 from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
-from ._bind import Bindable
+from ._bind import Bindable, wrap
 from ._edges import DebounceEdges, _Slot
 from ._types import Scheduler, _Handle, edge_options
 
@@ -80,11 +80,11 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
         scheduler: Scheduler = _default_scheduler,
     ) -> None:
         wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
-        # Copy the metadata first, so attributes of func can never replace our state.
-        functools.update_wrapper(self, func)
+        wrap(self, func)
         self._func = func
         self._settings = (wait, leading, trailing, max_wait, scheduler)
         self._runs: Runs[_R] = Runs()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._edges: DebounceEdges[functools.partial[Awaitable[_R]]] = DebounceEdges(
             wait,
             leading=leading,
@@ -95,7 +95,11 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
         )
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
-        asyncio.get_running_loop()  # outside a running loop: RuntimeError, state untouched
+        loop = asyncio.get_running_loop()  # no running loop: RuntimeError, state untouched
+        if loop is not self._loop:
+            # Timers of a previous loop died with it: what they held is dropped.
+            self._edges.cancel()
+            self._loop = loop
         run = self._edges.call(functools.partial(self._func, *args, **kwargs))
         if run is not None:
             self._runs.spawn(run)

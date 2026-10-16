@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 import venv
 from pathlib import Path
 
@@ -85,3 +86,26 @@ def test_a_usage_error_exits_2_without_a_traceback(script: Path) -> None:
     assert done.returncode == 2
     assert "wait must be between" in done.stderr
     assert "Traceback" not in done.stderr
+
+
+def test_the_command_gets_no_stdin_so_triggers_are_never_swallowed(
+    script: Path, tmp_path: Path
+) -> None:
+    marker = tmp_path / "stdin.txt"
+    code = f"import sys; open({str(marker)!r}, 'a').write(str(len(sys.stdin.read())))"
+    args = ["throttle", "--interval", "3600", "--", sys.executable, "-c", code]
+    with subprocess.Popen([str(script), *args], stdin=subprocess.PIPE, text=True) as proc:
+        assert proc.stdin is not None
+        proc.stdin.write("a\n")
+        proc.stdin.flush()
+        # The leading run starts while the pipe is still open: a command that could
+        # read our stdin would block here until it closes.
+        deadline = time.monotonic() + 60
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        ran_before_eof = marker.exists()
+        proc.stdin.write("b\n")
+        proc.stdin.close()
+        assert proc.wait(timeout=120) == 0
+    assert ran_before_eof
+    assert marker.read_text() == "0"

@@ -12,7 +12,7 @@ import argparse
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from . import __version__
 from ._debounce import Debounced, debounce
@@ -26,8 +26,9 @@ examples:
   # Deploy at most once every 10 seconds, including the final trigger:
   tail -f events.log | throttlebounce throttle --interval 10 --trailing -- ./deploy.sh
 
-Runs never overlap. Exit status: that of the last run, 0 if the command never ran,
-127 if it could not be started, 2 for a usage error, 130 when interrupted.
+Runs never overlap, and the command gets no standard input. Exit status: that of
+the last run, 0 if the command never ran, 127 if it could not be started, 2 for a
+usage error, 130 when interrupted.
 """
 
 
@@ -42,13 +43,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"throttlebounce {__version__}")
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    deb = subparsers.add_parser("debounce", help="run the command after triggers go quiet")
+    deb = subparsers.add_parser(
+        "debounce", prog="throttlebounce debounce", help="run the command after triggers go quiet"
+    )
     deb.add_argument("--wait", type=float, required=True, help="seconds of quiet before running")
     deb.add_argument("--max-wait", type=float, default=None, help="run at least this often")
     deb.add_argument("--leading", action="store_true", help="also run on the first trigger")
     deb.add_argument("--no-trailing", action="store_true", help="skip the run after quiet")
 
-    thr = subparsers.add_parser("throttle", help="run the command at most once per interval")
+    thr = subparsers.add_parser(
+        "throttle", prog="throttlebounce throttle", help="run the command at most once per interval"
+    )
     thr.add_argument("--interval", type=float, required=True, help="minimum seconds between runs")
     thr.add_argument("--trailing", action="store_true", help="also run the final trigger")
     return parser
@@ -64,25 +69,40 @@ def _split_command(args: Sequence[str]) -> tuple[list[str], list[str]]:
 
 
 class _Runner:
-    """Runs the command one at a time and remembers the last exit status."""
+    """Runs the command one at a time, remembers the last exit status, and builds the
+    timers, so that the end of input can wait for a run a timer has already taken."""
 
     def __init__(self, command: list[str]) -> None:
         self._command = command
         self._lock = threading.Lock()
+        self._timers: list[threading.Timer] = []
         self.status = 0
 
     def __call__(self) -> int:
         with self._lock:
             try:
-                status = subprocess.run(self._command, check=False).returncode
+                # The command gets no stdin: the trigger lines are ours, not its.
+                done = subprocess.run(self._command, stdin=subprocess.DEVNULL, check=False)
+                status = done.returncode
             except OSError as error:
                 print(f"throttlebounce: cannot run {self._command[0]!r}: {error}", file=sys.stderr)
                 status = 127
             self.status = status
             return status
 
-    def last_status(self) -> int:
-        """Wait for a run in progress, then return the last exit status."""
+    def timer(self, delay: float, action: Callable[[], None]) -> threading.Timer:
+        if len(self._timers) > 64:
+            self._timers = [t for t in self._timers if t.ident is None or t.is_alive()]
+        timer = threading.Timer(delay, action)
+        timer.daemon = True
+        self._timers.append(timer)
+        return timer
+
+    def finish(self) -> int:
+        """Wait for timers that already fired and their runs, then return the status."""
+        for timer in list(self._timers):
+            if timer.ident is not None:
+                timer.join()
         with self._lock:
             return self.status
 
@@ -106,20 +126,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 leading=namespace.leading,
                 trailing=not namespace.no_trailing,
                 max_wait=namespace.max_wait,
+                timer_factory=runner.timer,
             )(runner)
         else:
-            scheduled = throttle(namespace.interval, trailing=namespace.trailing)(runner)
+            scheduled = throttle(
+                namespace.interval, trailing=namespace.trailing, timer_factory=runner.timer
+            )(runner)
     except ValueError as error:
         parser.error(str(error))
 
     try:
         for _line in sys.stdin:
             scheduled()
+        # Pending runs happen now; flush cancels the timers that had not fired.
+        scheduled.flush()
+        return runner.finish()
     except KeyboardInterrupt:
         scheduled.cancel()
         return 130
-    scheduled.flush()
-    return runner.last_status()
 
 
 if __name__ == "__main__":

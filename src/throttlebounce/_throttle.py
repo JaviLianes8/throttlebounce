@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
-from ._bind import Bindable
+from ._bind import Bindable, wrap
 from ._edges import ThrottleEdges, _Slot
 from ._types import Clock, TimerFactory, _default_timer_factory, _Timer, seconds
 
@@ -44,8 +44,7 @@ class Throttled(Bindable, Generic[_P, _R]):
         timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
         interval = seconds("interval", interval)
-        # Copy the metadata first, so attributes of func can never replace our state.
-        functools.update_wrapper(self, func)
+        wrap(self, func)
         self._func = func
         self._settings = (interval, bool(trailing), clock, timer_factory)
         self._clock = clock
@@ -142,7 +141,8 @@ def throttle(
     seconds; calls inside the window are skipped and return the latest result. With
     ``trailing=True`` the most recent skipped call runs when the window closes, which
     opens the next window, so the final value of a busy stretch is never lost. A clock
-    reading earlier than the last run counts as a closed window.
+    reading earlier than the last run, or one that is not finite, counts as a closed
+    window.
 
     Raises TypeError if ``interval`` is not a real number, and ValueError if it is
     negative, NaN, infinite or beyond :data:`threading.TIMEOUT_MAX`.

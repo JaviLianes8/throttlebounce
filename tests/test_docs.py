@@ -32,6 +32,7 @@ CONSOLE = [
 class _Parked:
     def __init__(self, delay: float, action: Callable[[], None]) -> None:
         self.daemon = False
+        self.ident = None  # never started, as far as anyone waiting on it can tell
 
     def start(self) -> None:
         pass

@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
 from ._async_debounce import Runs, _default_scheduler
-from ._bind import Bindable
+from ._bind import Bindable, wrap
 from ._edges import ThrottleEdges, _Slot
 from ._types import Clock, Scheduler, seconds
 
@@ -48,18 +48,22 @@ class AsyncThrottled(Bindable, Generic[_P, _R]):
         scheduler: Scheduler = _default_scheduler,
     ) -> None:
         interval = seconds("interval", interval)
-        # Copy the metadata first, so attributes of func can never replace our state.
-        functools.update_wrapper(self, func)
+        wrap(self, func)
         self._func = func
         self._settings = (interval, bool(trailing), clock, scheduler)
         self._clock = clock
         self._runs: Runs[_R] = Runs()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._edges: ThrottleEdges[functools.partial[Awaitable[_R]]] = ThrottleEdges(
             interval, trailing=bool(trailing), new_timer=scheduler, fire=self._fire
         )
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
-        asyncio.get_running_loop()  # outside a running loop: RuntimeError, state untouched
+        loop = asyncio.get_running_loop()  # no running loop: RuntimeError, state untouched
+        if loop is not self._loop:
+            # Timers of a previous loop died with it: what they held is dropped.
+            self._edges.cancel()
+            self._loop = loop
         call = functools.partial(self._func, *args, **kwargs)
         run = self._edges.call(call, self._clock())
         if run is not None:

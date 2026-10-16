@@ -3,6 +3,8 @@ exceptions, clocks that jump, and the exact timer delays requested."""
 
 from __future__ import annotations
 
+import math
+
 import pytest
 from _fakes import FakeClock, TimerSpy
 from _virtual import VirtualTime
@@ -133,3 +135,18 @@ def test_a_zero_wait_still_defers_to_the_timer() -> None:
     gate(2)
     gate(3)
     assert seen == [1, 2, 3]
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_a_clock_reading_that_is_not_finite_never_sticks_the_window(bad: float) -> None:
+    clock = FakeClock()
+    seen: list[int] = []
+    record = throttle(10, trailing=True, clock=clock, timer_factory=TimerSpy())(seen.append)
+    clock.now = bad
+    record(1)
+    record(2)  # the bad reading opened no window
+    clock.now = 100.0
+    record(3)
+    record(4)  # a finite reading opens one again
+    assert seen == [1, 2, 3]
+    assert record.pending is True

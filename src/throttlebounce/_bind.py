@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from types import MethodType
 from typing import Any
+
+
+def wrap(wrapper: object, func: object) -> None:
+    """Copy the metadata of ``func`` onto ``wrapper`` without letting it hide anything.
+
+    Public attributes of ``func`` are copied too, as ``functools.wraps`` does, except
+    those the wrapper class defines (``flush``, ``cancel``, ...); private ones never are.
+    """
+    functools.update_wrapper(wrapper, func, updated=())  # type: ignore[arg-type]
+    names = getattr(func, "__dict__", {})
+    for name, value in names.items():
+        if not name.startswith("_") and not hasattr(type(wrapper), name):
+            vars(wrapper)[name] = value
 
 
 class Bindable:

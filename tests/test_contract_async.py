@@ -146,3 +146,26 @@ def test_async_flush_and_reset_mirror_the_sync_throttle() -> None:
         return flushed, waiting, show.result
 
     assert asyncio.run(main()) == (2, True, 4)
+
+
+def test_a_wrapper_moved_to_a_new_event_loop_starts_fresh() -> None:
+    seen: list[str] = []
+
+    @async_debounce(30, leading=True, trailing=False)
+    async def once(tag: str) -> None:
+        seen.append(tag)
+
+    @async_throttle(30, trailing=True, clock=FakeClock())
+    async def beat(tag: str) -> None:
+        seen.append(tag)
+
+    async def round_(tag: str) -> tuple[bool, bool]:
+        once(tag)
+        beat(f"{tag}-lead")
+        beat(f"{tag}-trail")
+        await asyncio.sleep(0)
+        return once.pending, beat.pending
+
+    assert asyncio.run(round_("loop1")) == (False, True)
+    assert asyncio.run(round_("loop2")) == (False, True)
+    assert seen == ["loop1", "loop1-lead", "loop2"]

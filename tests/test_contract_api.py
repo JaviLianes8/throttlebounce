@@ -133,3 +133,23 @@ def test_debounce_calls_return_none_and_throttle_calls_return_a_result() -> None
     assert leading.result == 5
     gate = throttle(1, clock=lambda: 0.0)(lambda: 6)
     assert gate() == 6
+
+
+def test_attributes_of_the_function_never_hide_the_wrapper_methods() -> None:
+    def job(value: int) -> int:
+        return value
+
+    for name in ("cancel", "flush", "reset", "pending", "_run", "_attr_name", "_edges"):
+        setattr(job, name, "hidden")
+    job.tag = "kept"  # type: ignore[attr-defined]
+    spy = TimerSpy()
+    deb = debounce(1, timer_factory=spy)(job)
+    deb(1)
+    assert deb.pending is True
+    deb.cancel()
+    assert deb.pending is False
+    assert vars(deb)["tag"] == "kept"
+    thr = throttle(1, clock=lambda: 0.0)(job)
+    assert thr(5) == 5
+    thr.reset()
+    assert thr(6) == 6

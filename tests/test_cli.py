@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import sys
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from throttlebounce._cli import _split_command, main
+from throttlebounce._cli import _Runner, _split_command, main
 
 
 def _code(marker: Path, status: int = 0) -> list[str]:
@@ -115,3 +118,33 @@ def test_an_interrupt_drops_the_pending_run_and_exits_130(
     monkeypatch.setattr(sys, "stdin", interrupted())
     assert main(["debounce", "--wait", "3600", "--", *_code(marker)]) == 130
     assert not marker.exists()
+
+
+def test_an_interrupt_during_the_final_run_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    def interrupted(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    _stdin(monkeypatch, "a\n")
+    monkeypatch.setattr(subprocess, "run", interrupted)
+    assert main(["debounce", "--wait", "3600", "--", "x"]) == 130
+
+
+def test_the_end_of_input_waits_for_a_run_a_timer_already_took(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    taken = threading.Event()
+    real_call = _Runner.__call__
+
+    def late(self: _Runner) -> int:
+        taken.set()
+        time.sleep(0.2)  # widens the gap between taking the call and running it
+        return real_call(self)
+
+    def lines() -> Iterator[str]:
+        yield "a"
+        assert taken.wait(30)
+
+    monkeypatch.setattr(_Runner, "__call__", late)
+    monkeypatch.setattr(sys, "stdin", lines())
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 7))
+    assert main(["debounce", "--wait", "0", "--", "x"]) == 7

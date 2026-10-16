@@ -40,6 +40,11 @@ Changed since 0.2.0 (which was never published to PyPI):
   is running, on every Python version, and report a failing timed run through the
   loop's exception handler.
 - Decorated methods keep their argument types for type checkers.
+- A clock reading that is not finite no longer freezes a throttle, attributes of the
+  wrapped function no longer hide the wrapper's methods, and an async wrapper called
+  from a new event loop drops what the old loop's dead timers held.
+- Command line: the command gets no standard input, and the end of input waits for a
+  run a timer has already started.
 - Command line: the exit status is that of the last run (0 if none, 127 if the command
   cannot start, 130 on Ctrl+C), runs never overlap, a pending run happens before exit,
   and bad values give a usage error instead of a traceback.

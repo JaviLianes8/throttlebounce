@@ -110,7 +110,8 @@ assert render.flush() == 20  # or let the window close on its own
 With `trailing=True` the most recent skipped call runs when the window closes, and
 that run opens the next window, so the final value of a busy stretch is never lost.
 A clock reading earlier than the last run (a clock that jumped back) counts as a
-closed window rather than a stuck one.
+closed window rather than a stuck one, and a reading that is not finite (NaN or an
+infinity) opens no window, so the next call runs.
 
 ## Control methods
 
@@ -154,7 +155,9 @@ nothing. `flush()` is a coroutine that awaits the run and raises what it raises;
 deadline has nobody awaiting it, so if it raises, the exception goes to the loop's
 exception handler (`loop.set_exception_handler`), the async counterpart of
 `threading.excepthook`. The wrappers keep a reference to every task until it finishes,
-so a run is never garbage-collected halfway.
+so a run is never garbage-collected halfway. A wrapper called from a new event loop
+(one `asyncio.run` per test, say) starts fresh there: a call left pending on the old
+loop, whose timers died with it, is dropped.
 
 ```python
 import asyncio
@@ -240,7 +243,9 @@ deployed
 
 `throttlebounce debounce --wait S [--max-wait S] [--leading] [--no-trailing] -- cmd`
 and `throttlebounce throttle --interval S [--trailing] -- cmd`. Each input line is one
-trigger. Runs never overlap. When the input ends, a pending run happens at once.
+trigger. Runs never overlap, and the command gets no standard input (the trigger lines
+are not passed to it). When the input ends, a pending run happens at once, and the
+tool waits for a run already under way.
 Exit status: that of the last run, 0 if the command never ran, 127 if it could not be
 started, 2 for a usage error, 130 when interrupted with Ctrl+C.
 

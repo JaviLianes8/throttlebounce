@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable
 from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
-from ._bind import Bindable
+from ._bind import Bindable, wrap
 from ._edges import DebounceEdges, _Slot
 from ._types import TimerFactory, _default_timer_factory, _Timer, edge_options
 
@@ -47,8 +47,7 @@ class Debounced(Bindable, Generic[_P, _R]):
         timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
         wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
-        # Copy the metadata first, so attributes of func can never replace our state.
-        functools.update_wrapper(self, func)
+        wrap(self, func)
         self._func = func
         self._settings = (wait, leading, trailing, max_wait, timer_factory)
         self._factory = timer_factory
