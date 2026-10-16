@@ -247,9 +247,10 @@ started, 2 for a usage error, 130 when interrupted with Ctrl+C.
 ## Differences from lodash
 
 The scenarios in `tests/fixtures/oracle_runs.json` were run through lodash 4.18.1 and
-Underscore 1.13.8 (`scripts/oracle_fixture.py`). Debounce matches Underscore in all of
-them and lodash in all but the two cases below; throttle matches Underscore in all of
-them and lodash whenever the trailing edge is off.
+Underscore 1.13.8 (`scripts/oracle_fixture.py`); they are plain calls, with no control
+methods. Debounce matches Underscore in all of them and lodash in all but the two cases
+below; throttle matches Underscore in all of them and lodash whenever the trailing edge
+is off.
 
 - **Deadlines.** After a `max_wait` run, lodash restarts its timer at the next call
   with the full `wait`, so when `max_wait` is under twice `wait` the next deadline can
@@ -259,6 +260,15 @@ them and lodash whenever the trailing edge is off.
   debounce, so a trailing run can come late, and a call right after a trailing run can
   run again at once, twice inside one interval. throttlebounce, like Underscore, keeps
   every run at least one interval after the one before.
+
+The control methods differ by design too:
+
+- **Debounce `flush()` ends the burst.** The next call opens a new one: with
+  `leading=True` it runs at once, and its `max_wait` deadline counts from that call.
+  lodash keeps timing from the last call before the flush and from the flushed run, so
+  its next leading run, trailing run or deadline can come at a different time.
+- **Throttle `cancel()` keeps the window.** lodash's and Underscore's `cancel` also
+  forget the last run; here that is `cancel()` followed by `reset()`.
 
 Other differences by design: throttle defaults to `trailing=False` (lodash and
 Underscore default to `True`); there is no `leading=False` option for throttle; a
