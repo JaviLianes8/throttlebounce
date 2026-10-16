@@ -1,0 +1,20 @@
+{
+  "lodash": {
+    "title": "lodash 4.18.1 (npm package)",
+    "url": "https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz",
+    "revision": "4.18.1, npm sha1 ff2b66c1f6326d59513de2407bf881439812771c",
+    "licence": "MIT (https://github.com/lodash/lodash/blob/main/LICENSE)",
+    "fetched": "2026-10-16",
+    "size": 315640,
+    "sha256": "696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16"
+  },
+  "underscore": {
+    "title": "Underscore.js 1.13.8 (npm package)",
+    "url": "https://registry.npmjs.org/underscore/-/underscore-1.13.8.tgz",
+    "revision": "1.13.8, npm sha1 a93a21186c049dbf0e847496dba72b7bd8c1e92b",
+    "licence": "MIT (https://github.com/jashkenas/underscore/blob/master/LICENSE)",
+    "fetched": "2026-10-16",
+    "size": 218015,
+    "sha256": "6547214df2878ae60cc552422ef14af38b8d4e3aa613be5bfe9c52b775d96f7a"
+  }
+}

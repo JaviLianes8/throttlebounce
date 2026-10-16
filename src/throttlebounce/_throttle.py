@@ -6,26 +6,30 @@ import functools
 import threading
 import time
 from collections.abc import Callable
-from typing import Generic, ParamSpec, TypeVar
+from typing import Any, Generic, ParamSpec, TypeVar, overload
 
-from ._debounce import TimerFactory, _default_timer_factory, _Timer
+from ._bind import Bindable
+from ._edges import ThrottleEdges, _Slot
+from ._types import Clock, TimerFactory, _default_timer_factory, _Timer, seconds
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
-Clock = Callable[[], float]
-"""Returns a monotonically increasing time in seconds.
 
-Inject a fake clock in tests so nothing waits on real time.
-"""
+class Throttled(Bindable, Generic[_P, _R]):
+    """A callable that runs ``func`` at most once per ``interval``; built by :func:`throttle`.
 
+    A call that runs returns the new result; a skipped call returns the latest result
+    (None before the first run). Thread-safe; ``func`` runs outside the internal lock.
 
-class Throttled(Generic[_P, _R]):
-    """A callable that runs ``func`` at most once per ``interval`` seconds.
-
-    The first call runs immediately (leading edge). With ``trailing`` on, the
-    most recent call that arrived during a busy interval also runs when the
-    interval closes, so the final value is never dropped.
+    >>> from throttlebounce import throttle
+    >>> @throttle(60.0, trailing=True)
+    ... def show(n: int) -> int:
+    ...     return n
+    >>> show(1), show(2), show(3)
+    (1, 1, 1)
+    >>> show.pending, show.flush(), show.result
+    (True, 3, 3)
     """
 
     def __init__(
@@ -33,57 +37,43 @@ class Throttled(Generic[_P, _R]):
         func: Callable[_P, _R],
         interval: float,
         *,
-        trailing: bool,
-        clock: Clock,
-        timer_factory: TimerFactory,
+        trailing: bool = False,
+        clock: Clock = time.monotonic,
+        timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
+        interval = seconds("interval", interval)
         self._func = func
-        self._interval = interval
-        self._trailing = trailing
+        self._settings = (interval, bool(trailing), clock, timer_factory)
         self._clock = clock
-        self._new_timer = timer_factory
+        self._factory = timer_factory
         self._lock = threading.Lock()
-        self._last: float | None = None
-        self._timer: _Timer | None = None
-        self._pending: functools.partial[_R] | None = None
+        self._starting: list[_Timer] = []
+        self._edges: ThrottleEdges[functools.partial[_R]] = ThrottleEdges(
+            interval, trailing=bool(trailing), new_timer=self._new_timer, fire=self._fire
+        )
         self._result: _R | None = None
         functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R | None:
         call = functools.partial(self._func, *args, **kwargs)
-        start_timer: _Timer | None = None
-        run_now: functools.partial[_R] | None = None
         with self._lock:
-            now = self._clock()
-            if self._last is None or now - self._last >= self._interval:
-                self._last = now
-                run_now = call
-                self._pending = None
-                if self._timer is not None:
-                    self._timer.cancel()
-                    self._timer = None
-            elif self._trailing:
-                self._pending = call
-                if self._timer is None:
-                    remaining = self._interval - (now - self._last)
-                    self._timer = self._new_timer(remaining, self._on_trailing)
-                    start_timer = self._timer
-        if start_timer is not None:
-            start_timer.start()
-        if run_now is not None:
-            return self._run(run_now)
-        with self._lock:
-            return self._result
+            run = self._edges.call(call, self._clock())
+            starting, self._starting = self._starting, []
+            result = self._result
+        for timer in starting:
+            timer.start()
+        return result if run is None else self._run(run)
 
-    def _on_trailing(self) -> None:
+    def _new_timer(self, delay: float, action: Callable[[], None]) -> _Timer:
+        timer = self._factory(delay, action)
+        self._starting.append(timer)
+        return timer
+
+    def _fire(self, slot: _Slot) -> None:
         with self._lock:
-            call = self._pending
-            self._pending = None
-            self._timer = None
-            if call is not None:
-                self._last = self._clock()
-        if call is not None:
-            self._run(call)
+            run = self._edges.expire(slot, self._clock())
+        if run is not None:
+            self._run(run)
 
     def _run(self, call: functools.partial[_R]) -> _R:
         result = call()
@@ -92,43 +82,46 @@ class Throttled(Generic[_P, _R]):
         return result
 
     def cancel(self) -> None:
-        """Drop any pending trailing call so it will never run."""
+        """Drop the pending trailing call, if any; the current window stays."""
         with self._lock:
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
-            self._pending = None
+            self._edges.cancel()
 
     def flush(self) -> _R | None:
-        """Run any pending trailing call now and return its result, else None."""
+        """Run the pending trailing call now and return its result; None if none.
+
+        The run counts as the start of a new window.
+        """
         with self._lock:
-            call = self._pending
-            self._pending = None
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
-            if call is not None:
-                self._last = self._clock()
-        if call is None:
-            return None
-        return self._run(call)
+            run = self._edges.take(self._clock())
+        return None if run is None else self._run(run)
 
     def reset(self) -> None:
-        """Forget the last run so the next call fires immediately."""
+        """Forget the last run, so the next call runs at once."""
         with self._lock:
-            self._last = None
+            self._edges.reset()
 
     @property
     def pending(self) -> bool:
-        """Whether a trailing call is waiting to run."""
+        """Whether a trailing call is waiting for the window to close."""
         with self._lock:
-            return self._pending is not None
+            return self._edges.pending
 
     @property
     def result(self) -> _R | None:
-        """The most recent result produced, or None before the first run."""
+        """What the most recent run returned, or None before the first run."""
         with self._lock:
             return self._result
+
+    def _rebuild(self, func: Callable[..., Any]) -> Throttled[..., _R]:
+        interval, trailing, clock, factory = self._settings
+        return Throttled(func, interval, trailing=trailing, clock=clock, timer_factory=factory)
+
+    @overload
+    def __get__(self, obj: None, objtype: type | None = None) -> Throttled[_P, _R]: ...
+    @overload
+    def __get__(self, obj: object, objtype: type | None = None) -> Throttled[..., _R]: ...
+    def __get__(self, obj: object, objtype: type | None = None) -> Throttled[Any, _R]:
+        return self if obj is None else self._bind_to(obj)
 
 
 def throttle(
@@ -138,25 +131,28 @@ def throttle(
     clock: Clock = time.monotonic,
     timer_factory: TimerFactory = _default_timer_factory,
 ) -> Callable[[Callable[_P, _R]], Throttled[_P, _R]]:
-    """Return a decorator that throttles a function to once per ``interval``.
+    """Return a decorator that throttles a function to one run per ``interval`` seconds.
 
-    The first call runs immediately; any call within ``interval`` of the last run
-    is skipped and returns the last result (None before the first run). With
-    ``trailing=True`` the most recent skipped call is scheduled to run when the
-    interval closes, so the final value in a busy window is not lost; ``flush``
-    runs it now, ``cancel`` drops it, ``pending`` reports it, and ``result``
-    reads the last value produced. ``reset`` clears the window.
+    The first call runs at once (leading edge) and opens a window of ``interval``
+    seconds; calls inside the window are skipped and return the latest result. With
+    ``trailing=True`` the most recent skipped call runs when the window closes, which
+    opens the next window, so the final value of a busy stretch is never lost. A clock
+    reading earlier than the last run counts as a closed window.
+
+    Raises TypeError if ``interval`` is not a real number, and ValueError if it is
+    negative, NaN, infinite or beyond :data:`threading.TIMEOUT_MAX`.
+
+    >>> @throttle(60.0)
+    ... def hello(name: str) -> str:
+    ...     return f"hello {name}"
+    >>> hello("ana"), hello("bob")
+    ('hello ana', 'hello ana')
     """
-    if interval < 0:
-        raise ValueError("interval must be non-negative")
+    seconds("interval", interval)
 
     def decorator(func: Callable[_P, _R]) -> Throttled[_P, _R]:
         return Throttled(
-            func,
-            interval,
-            trailing=trailing,
-            clock=clock,
-            timer_factory=timer_factory,
+            func, interval, trailing=trailing, clock=clock, timer_factory=timer_factory
         )
 
     return decorator

@@ -5,36 +5,59 @@ from __future__ import annotations
 import asyncio
 import functools
 from collections.abc import Awaitable, Callable
-from typing import Generic, ParamSpec, Protocol, TypeVar
+from typing import Any, Generic, ParamSpec, TypeVar, overload
+
+from ._bind import Bindable
+from ._edges import DebounceEdges, _Slot
+from ._types import Scheduler, _Handle, edge_options
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
-
-
-class _Handle(Protocol):
-    """The slice of asyncio.TimerHandle the async timers depend on."""
-
-    def cancel(self) -> None: ...
-
-
-Scheduler = Callable[[float, Callable[[], None]], _Handle]
-"""Schedules an action to run after a delay on the running event loop.
-
-Inject a fake scheduler in tests so nothing waits on real time.
-"""
 
 
 def _default_scheduler(delay: float, action: Callable[[], None]) -> _Handle:
     return asyncio.get_running_loop().call_later(delay, action)
 
 
-class AsyncDebounced(Generic[_P, _R]):
-    """A coroutine wrapper that debounces runs on an asyncio event loop.
+class Runs(Generic[_R]):
+    """Spawns runs as tasks, holds them until done, and keeps the latest result."""
 
-    Must be called while an event loop is running. The wrapper schedules the real
-    coroutine with the loop; calling it returns None (runs happen later). Use the
-    async ``flush`` to run the pending call now, ``cancel`` to drop it, and the
-    ``pending`` and ``result`` properties to inspect state.
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Future[None]] = set()
+        self.result: _R | None = None
+
+    def spawn(self, call: Callable[[], Awaitable[_R]]) -> None:
+        # The loop keeps only weak references to tasks; holding them here stops a
+        # running call from being collected halfway.
+        task = asyncio.ensure_future(self._run(call))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run(self, call: Callable[[], Awaitable[_R]]) -> None:
+        await self.now(call)
+
+    async def now(self, call: Callable[[], Awaitable[_R]]) -> _R:
+        result = await call()
+        self.result = result
+        return result
+
+
+class AsyncDebounced(Bindable, Generic[_P, _R]):
+    """A coroutine wrapper that debounces on the running event loop; see :func:`async_debounce`.
+
+    Calling it returns None and must happen while a loop runs: each run is a task on
+    that loop. Not thread-safe; use it from the loop's thread.
+
+    >>> import asyncio
+    >>> from throttlebounce import async_debounce
+    >>> @async_debounce(60.0)
+    ... async def push(value: int) -> int:
+    ...     return value
+    >>> async def main() -> tuple[bool, int | None]:
+    ...     push(1); push(2)
+    ...     return push.pending, await push.flush()
+    >>> asyncio.run(main())
+    (True, 2)
     """
 
     def __init__(
@@ -42,101 +65,66 @@ class AsyncDebounced(Generic[_P, _R]):
         func: Callable[_P, Awaitable[_R]],
         wait: float,
         *,
-        leading: bool,
-        trailing: bool,
-        max_wait: float | None,
-        scheduler: Scheduler,
+        leading: bool = False,
+        trailing: bool = True,
+        max_wait: float | None = None,
+        scheduler: Scheduler = _default_scheduler,
     ) -> None:
+        wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
         self._func = func
-        self._wait = wait
-        self._leading = leading
-        self._trailing = trailing
-        self._max_wait = max_wait
-        self._schedule = scheduler
-        self._handle: _Handle | None = None
-        self._max_handle: _Handle | None = None
-        self._pending: functools.partial[Awaitable[_R]] | None = None
-        self._task: asyncio.Future[None] | None = None
-        self._result: _R | None = None
-        self._burst = False
+        self._settings = (wait, leading, trailing, max_wait, scheduler)
+        self._runs: Runs[_R] = Runs()
+        self._edges: DebounceEdges[functools.partial[Awaitable[_R]]] = DebounceEdges(
+            wait,
+            leading=leading,
+            trailing=trailing,
+            max_wait=max_wait,
+            new_timer=scheduler,
+            fire=self._fire,
+        )
         functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
-        call = functools.partial(self._func, *args, **kwargs)
-        leading_edge = not self._burst
-        self._burst = True
-        if leading_edge and self._leading:
-            self._pending = None
-            self._spawn(call)
-        else:
-            self._pending = call
-        if self._handle is not None:
-            self._handle.cancel()
-        self._handle = self._schedule(self._wait, self._on_trailing)
-        if self._max_wait is not None and self._max_handle is None:
-            self._max_handle = self._schedule(self._max_wait, self._on_max)
+        run = self._edges.call(functools.partial(self._func, *args, **kwargs))
+        if run is not None:
+            self._runs.spawn(run)
 
-    def _spawn(self, call: functools.partial[Awaitable[_R]]) -> None:
-        self._task = asyncio.ensure_future(self._run(call()))
-
-    async def _run(self, awaitable: Awaitable[_R]) -> None:
-        self._result = await awaitable
-
-    def _clear_timers(self) -> None:
-        if self._handle is not None:
-            self._handle.cancel()
-            self._handle = None
-        if self._max_handle is not None:
-            self._max_handle.cancel()
-            self._max_handle = None
-        self._burst = False
-
-    def _on_trailing(self) -> None:
-        self._handle = None
-        if self._max_handle is not None:
-            self._max_handle.cancel()
-            self._max_handle = None
-        self._burst = False
-        call = self._pending if self._trailing else None
-        self._pending = None
-        if call is not None:
-            self._spawn(call)
-
-    def _on_max(self) -> None:
-        self._max_handle = None
-        if self._handle is not None:
-            self._handle.cancel()
-            self._handle = None
-        self._burst = False
-        call = self._pending
-        self._pending = None
-        if call is not None:
-            self._spawn(call)
+    def _fire(self, slot: _Slot) -> None:
+        run = self._edges.expire(slot)
+        if run is not None:
+            self._runs.spawn(run)
 
     def cancel(self) -> None:
-        """Drop any pending call so it will never run."""
-        self._pending = None
-        self._clear_timers()
+        """Drop the pending call, if any, and end the burst. Runs already started go on."""
+        self._edges.cancel()
 
     async def flush(self) -> _R | None:
-        """Run any pending call now and return its result, else None."""
-        call = self._pending
-        self._pending = None
-        self._clear_timers()
-        if call is None:
-            return None
-        self._result = await call()
-        return self._result
+        """Run the pending call now, await it and return its result; None if none."""
+        run = self._edges.take()
+        return None if run is None else await self._runs.now(run)
 
     @property
     def pending(self) -> bool:
-        """Whether a call is waiting to run."""
-        return self._pending is not None
+        """Whether a call is waiting for the trailing edge or the ``max_wait`` deadline."""
+        return self._edges.pending
 
     @property
     def result(self) -> _R | None:
-        """The most recent result produced, or None before the first run."""
-        return self._result
+        """What the most recently finished run returned, or None before any finished."""
+        return self._runs.result
+
+    def _rebuild(self, func: Callable[..., Any]) -> AsyncDebounced[..., _R]:
+        wait, leading, trailing, max_wait, scheduler = self._settings
+        return AsyncDebounced(
+            func, wait, leading=leading, trailing=trailing, max_wait=max_wait, scheduler=scheduler
+        )
+
+    @overload
+    def __get__(self, obj: None, objtype: type | None = None) -> AsyncDebounced[_P, _R]: ...
+    @overload
+    def __get__(self, obj: object, objtype: type | None = None) -> AsyncDebounced[..., _R]: ...
+    def __get__(self, obj: object, objtype: type | None = None) -> AsyncDebounced[Any, _R]:
+        return self if obj is None else self._bind_to(obj)
 
 
 def async_debounce(
@@ -149,26 +137,25 @@ def async_debounce(
 ) -> Callable[[Callable[_P, Awaitable[_R]]], AsyncDebounced[_P, _R]]:
     """Return a decorator that debounces a coroutine function.
 
-    Mirrors :func:`throttlebounce.debounce` for asyncio: rapid calls collapse
-    into as few runs as the edges allow, scheduled on the running loop with no
-    threads. ``leading``, ``trailing`` and ``max_wait`` behave as on the sync
-    side. The wrapped call returns None; await ``flush`` to force a run.
+    The same edges, ``max_wait`` and errors as :func:`throttlebounce.debounce`, scheduled
+    on the running event loop with no threads.
+
+    >>> import asyncio
+    >>> @async_debounce(60.0, leading=True)
+    ... async def ping(n: int) -> int:
+    ...     return n
+    >>> async def main() -> int | None:
+    ...     ping(1)
+    ...     await asyncio.sleep(0)
+    ...     return ping.result
+    >>> asyncio.run(main())
+    1
     """
-    if wait < 0:
-        raise ValueError("wait must be non-negative")
-    if max_wait is not None and max_wait < 0:
-        raise ValueError("max_wait must be non-negative")
-    if not leading and not trailing:
-        raise ValueError("async_debounce must fire on at least one edge")
+    edge_options(wait, leading, trailing, max_wait)
 
     def decorator(func: Callable[_P, Awaitable[_R]]) -> AsyncDebounced[_P, _R]:
         return AsyncDebounced(
-            func,
-            wait,
-            leading=leading,
-            trailing=trailing,
-            max_wait=max_wait,
-            scheduler=scheduler,
+            func, wait, leading=leading, trailing=trailing, max_wait=max_wait, scheduler=scheduler
         )
 
     return decorator

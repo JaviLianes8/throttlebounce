@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+import throttlebounce
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _IS_WINDOWS = os.name == "nt"
 
@@ -48,7 +50,7 @@ def test_installed_script_reports_its_version(console_script: Path) -> None:
         timeout=30,
         check=True,
     )
-    assert result.stdout.strip() == "throttlebounce 0.2.0"
+    assert result.stdout.strip() == f"throttlebounce {throttlebounce.__version__}"
 
 
 def test_installed_script_debounces_a_burst_into_one_run(
