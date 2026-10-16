@@ -191,3 +191,26 @@ def test_a_timer_that_fires_inside_start_does_not_deadlock() -> None:
     gate(2)
     gate(3)
     assert seen == [1, 2, 3]
+
+
+def test_nothing_stays_scheduled_once_a_burst_ends() -> None:
+    time = VirtualTime()
+    seen: list[int] = []
+    record = debounce(1, max_wait=5, timer_factory=time.timer_factory)(seen.append)
+    record(1)
+    time.advance(0.5)
+    record(2)
+    time.advance(10)
+    assert (seen, time.queued()) == ([2], 0)
+    for stop in (record.cancel, record.flush):
+        record(3)
+        assert time.queued() == 2
+        stop()
+        assert time.queued() == 0
+    gate = throttle(1, trailing=True, clock=time.clock, timer_factory=time.timer_factory)(
+        seen.append
+    )
+    gate(4)
+    gate(5)
+    time.advance(20)
+    assert time.queued() == 0
