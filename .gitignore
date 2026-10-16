@@ -10,3 +10,8 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Reference JavaScript libraries, fetched by scripts/fetch_oracles.py; only the manifest and runner are tracked.
+tests/oracle/*
+!tests/oracle/MANIFEST.json
+!tests/oracle/run.cjs

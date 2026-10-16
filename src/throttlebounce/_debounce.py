@@ -5,40 +5,35 @@ from __future__ import annotations
 import functools
 import threading
 from collections.abc import Callable
-from typing import Generic, ParamSpec, Protocol, TypeVar
+from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
+
+from ._bind import Bindable, wrap
+from ._edges import DebounceEdges, _Slot
+from ._types import TimerFactory, _default_timer_factory, _Timer, edge_options
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S")
+_Q = ParamSpec("_Q")
 
 
-class _Timer(Protocol):
-    """The slice of threading.Timer the debouncer depends on."""
+class Debounced(Bindable, Generic[_P, _R]):
+    """A callable that delays ``func`` around a burst of calls; built by :func:`debounce`.
 
-    def start(self) -> None: ...
+    Calling it returns None: runs happen on a timer thread, or inside the call for the
+    leading edge. Thread-safe; ``func`` always runs outside the internal lock.
 
-    def cancel(self) -> None: ...
-
-
-TimerFactory = Callable[[float, Callable[[], None]], _Timer]
-"""Builds a one-shot timer that runs an action after a delay in seconds.
-
-Inject a fake factory in tests so nothing waits on real time.
-"""
-
-
-def _default_timer_factory(delay: float, action: Callable[[], None]) -> _Timer:
-    # Daemon so a still-pending call never keeps the interpreter alive on exit.
-    timer = threading.Timer(delay, action)
-    timer.daemon = True
-    return timer
-
-
-class Debounced(Generic[_P, _R]):
-    """A callable that delays ``func`` around a burst of calls.
-
-    With the defaults it runs once, ``wait`` seconds after the last call
-    (trailing edge). ``leading`` adds a run on the first call of a burst, and
-    ``max_wait`` guarantees a run at least that often during a sustained burst.
+    >>> from throttlebounce import debounce
+    >>> @debounce(60.0)
+    ... def save(text: str) -> int:
+    ...     return len(text)
+    >>> save("h"); save("hello")
+    >>> save.pending
+    True
+    >>> save.flush()
+    5
+    >>> save.pending, save.result
+    (False, 5)
     """
 
     def __init__(
@@ -46,111 +41,103 @@ class Debounced(Generic[_P, _R]):
         func: Callable[_P, _R],
         wait: float,
         *,
-        leading: bool,
-        trailing: bool,
-        max_wait: float | None,
-        timer_factory: TimerFactory,
+        leading: bool = False,
+        trailing: bool = True,
+        max_wait: float | None = None,
+        timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
+        wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
+        wrap(self, func)
         self._func = func
-        self._wait = wait
-        self._leading = leading
-        self._trailing = trailing
-        self._max_wait = max_wait
-        self._new_timer = timer_factory
+        self._settings = (wait, leading, trailing, max_wait, timer_factory)
+        self._factory = timer_factory
         self._lock = threading.Lock()
-        self._timer: _Timer | None = None
-        self._max_timer: _Timer | None = None
-        self._pending: functools.partial[_R] | None = None
+        self._starting: list[_Timer] = []
+        self._edges: DebounceEdges[functools.partial[_R]] = DebounceEdges(
+            wait,
+            leading=leading,
+            trailing=trailing,
+            max_wait=max_wait,
+            new_timer=self._new_timer,
+            fire=self._fire,
+        )
         self._result: _R | None = None
-        self._burst = False
-        functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
         call = functools.partial(self._func, *args, **kwargs)
-        run_now: functools.partial[_R] | None = None
         with self._lock:
-            leading_edge = not self._burst
-            self._burst = True
-            if leading_edge and self._leading:
-                run_now = call
-                self._pending = None
-            else:
-                self._pending = call
-            if self._timer is not None:
-                self._timer.cancel()
-            self._timer = self._new_timer(self._wait, self._on_trailing)
-            trailing_timer = self._timer
-            max_timer: _Timer | None = None
-            if self._max_wait is not None and self._max_timer is None:
-                self._max_timer = self._new_timer(self._max_wait, self._on_max)
-                max_timer = self._max_timer
-        trailing_timer.start()
-        if max_timer is not None:
-            max_timer.start()
-        if run_now is not None:
-            self._result = run_now()
+            run = self._edges.call(call)
+            starting = self._take_starting()
+        for timer in starting:
+            timer.start()
+        if run is not None:
+            self._run(run)
 
-    def _end_burst_locked(self) -> None:
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-        if self._max_timer is not None:
-            self._max_timer.cancel()
-            self._max_timer = None
-        self._burst = False
+    def _new_timer(self, delay: float, action: Callable[[], None]) -> _Timer:
+        timer = self._factory(delay, action)
+        self._starting.append(timer)
+        return timer
 
-    def _on_trailing(self) -> None:
+    def _take_starting(self) -> list[_Timer]:
+        # Timers start outside the lock, so a factory that fires at once cannot deadlock.
+        starting, self._starting = self._starting, []
+        return starting
+
+    def _fire(self, slot: _Slot) -> None:
         with self._lock:
-            call = self._pending if self._trailing else None
-            self._pending = None
-            self._timer = None
-            if self._max_timer is not None:
-                self._max_timer.cancel()
-                self._max_timer = None
-            self._burst = False
-        if call is not None:
-            self._result = call()
+            run = self._edges.expire(slot)
+            starting = self._take_starting()
+        for timer in starting:
+            timer.start()
+        if run is not None:
+            self._run(run)
 
-    def _on_max(self) -> None:
+    def _run(self, call: functools.partial[_R]) -> _R:
+        result = call()
         with self._lock:
-            call = self._pending
-            self._pending = None
-            self._max_timer = None
-            if self._timer is not None:
-                self._timer.cancel()
-                self._timer = None
-            self._burst = False
-        if call is not None:
-            self._result = call()
+            self._result = result
+        return result
 
     def cancel(self) -> None:
-        """Drop any pending call so it will never run."""
+        """Drop the pending call, if any, and end the burst."""
         with self._lock:
-            self._pending = None
-            self._end_burst_locked()
+            self._edges.cancel()
 
     def flush(self) -> _R | None:
-        """Run any pending call right now and return its result, else None."""
+        """Run the pending call now and return its result; None when nothing is pending.
+
+        The burst ends either way, so the next call opens a new one.
+        """
         with self._lock:
-            call = self._pending
-            self._pending = None
-            self._end_burst_locked()
-        if call is None:
-            return None
-        self._result = call()
-        return self._result
+            run = self._edges.take()
+        return None if run is None else self._run(run)
 
     @property
     def pending(self) -> bool:
-        """Whether a call is waiting to run."""
+        """Whether a call is waiting for the trailing edge or the ``max_wait`` deadline."""
         with self._lock:
-            return self._pending is not None
+            return self._edges.pending
 
     @property
     def result(self) -> _R | None:
-        """The most recent result produced, or None before the first run."""
+        """What the most recent run returned, or None before the first run."""
         with self._lock:
             return self._result
+
+    def _rebuild(self, func: Callable[..., Any]) -> Debounced[..., _R]:
+        wait, leading, trailing, max_wait, factory = self._settings
+        return Debounced(
+            func, wait, leading=leading, trailing=trailing, max_wait=max_wait, timer_factory=factory
+        )
+
+    @overload
+    def __get__(self, obj: None, objtype: type | None = None) -> Debounced[_P, _R]: ...
+    @overload
+    def __get__(
+        self: Debounced[Concatenate[_S, _Q], _R], obj: _S, objtype: type | None = None
+    ) -> Debounced[_Q, _R]: ...
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        return self if obj is None else self._bind_to(obj)
 
 
 def debounce(
@@ -163,23 +150,27 @@ def debounce(
 ) -> Callable[[Callable[_P, _R]], Debounced[_P, _R]]:
     """Return a decorator that debounces a function.
 
-    Rapid calls collapse into as few runs as the edges allow. By default the
-    wrapped function runs once, ``wait`` seconds after the final call, with that
-    call's arguments (trailing edge). Set ``leading=True`` to also run on the
-    first call of a burst; with both edges on, the trailing run happens only when
-    more than one call arrived. ``max_wait`` forces a run at least that often
-    during an unbroken burst, so a continuous stream is never starved.
+    A burst is a run of calls less than ``wait`` seconds apart. By default the function
+    runs once, ``wait`` seconds after the last call of the burst, with that call's
+    arguments (trailing edge). ``leading=True`` runs it on the first call of the burst;
+    with both edges on, the trailing run happens only if another call came after the
+    leading one. ``max_wait`` (at least ``wait``) caps how long a call can be held: during
+    an unbroken burst the latest call runs ``max_wait`` after the burst began, then again
+    ``max_wait`` after each such run.
 
-    The debounced callable returns None (deferred runs happen on a timer); use
-    ``flush`` to force the pending call now, ``cancel`` to drop it, ``pending``
-    to check for a waiting call, and ``result`` to read the last value produced.
+    Raises TypeError if a duration is not a real number, and ValueError if it is negative,
+    NaN, infinite, beyond :data:`threading.TIMEOUT_MAX`, if ``max_wait < wait``, or if
+    both edges are off.
+
+    >>> @debounce(60.0, leading=True)
+    ... def ping(n: int) -> int:
+    ...     return n
+    >>> ping(1); ping.result
+    1
+    >>> ping(2); ping(3); ping.flush()
+    3
     """
-    if wait < 0:
-        raise ValueError("wait must be non-negative")
-    if max_wait is not None and max_wait < 0:
-        raise ValueError("max_wait must be non-negative")
-    if not leading and not trailing:
-        raise ValueError("debounce must fire on at least one edge")
+    edge_options(wait, leading, trailing, max_wait)
 
     def decorator(func: Callable[_P, _R]) -> Debounced[_P, _R]:
         return Debounced(

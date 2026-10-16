@@ -149,11 +149,11 @@ def test_max_wait_forces_a_run_during_an_unbroken_burst() -> None:
         seen.append(value)
 
     record(1)
-    assert spy.timers[1].delay == 1.0
+    deadline = next(t for t in spy.timers if t.delay == 1.0)
     record(2)
     record(3)
     assert seen == []
-    spy.timers[1].fire()
+    deadline.fire()
     assert seen == [3]
 
 

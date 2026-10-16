@@ -1,7 +1,19 @@
 # throttlebounce
 
-Small, typed, zero-dependency debounce and throttle decorators, sync and async,
-with injectable time so tests never wait on the clock.
+[![Lianes8 Certified](https://lianes8studio.com/certified/lianes8-certified-badge.svg)](https://lianes8studio.com/certified)
+
+Typed, zero-dependency debounce and throttle decorators for Python, sync and async,
+with the edge semantics of lodash and Underscore and injectable time, so your tests
+never sleep.
+
+- `debounce`: run once a burst of calls goes quiet (trailing edge), on its first call
+  (leading edge), or both, with an optional `max_wait` so a non-stop stream still runs.
+- `throttle`: run at most once per interval, optionally also the last call of a busy
+  window (trailing edge).
+- `async_debounce` and `async_throttle`: the same for coroutine functions, on the
+  running event loop.
+- A `throttlebounce` command that debounces or throttles a shell command fed by
+  trigger lines on standard input.
 
 ## Install
 
@@ -9,136 +21,176 @@ with injectable time so tests never wait on the clock.
 pip install throttlebounce
 ```
 
-## Usage
+Python 3.10 or newer. No runtime dependencies.
+
+## Quick start
 
 ```python
 from throttlebounce import debounce, throttle
 
+saved = []
+
 
 @debounce(0.3)
 def save(text: str) -> None:
-    write_to_disk(text)
+    saved.append(text)
 
 
-# Called on every keystroke, it writes once, 0.3s after typing stops.
+# Called on every keystroke; only the last call runs, 0.3 s after typing stops.
 save("h")
 save("he")
-save("hello")  # only this one reaches disk
+save("hello")
+save.flush()  # run the pending call now instead of waiting
+assert saved == ["hello"]
 
 
 @throttle(1.0)
-def ping() -> None:
-    send_heartbeat()
+def progress(percent: int) -> int:
+    return percent
 
 
-# Called in a tight loop, it fires at most once per second.
-while running:
-    ping()
+assert progress(10) == 10  # the first call runs at once
+assert progress(20) == 10  # inside the interval: skipped, returns the last result
 ```
 
-`debounce` collapses a burst of calls into as few runs as the edges allow. By
-default it runs once after the calls go quiet (trailing edge), with the last
-call's arguments. `leading=True` also runs on the first call of a burst, and
-`max_wait=...` forces a run at least that often during an unbroken stream so it is
-never starved. The debounced callable returns `None` (the real run happens later
-on a timer); it exposes `flush()` to run the pending call now and return its
-result, `cancel()` to drop it, a `pending` flag, and a `result` property.
+Every wrapper has `flush()` (run the pending call now), `cancel()` (drop it),
+`pending` and `result`; throttles also have `reset()`. The sync wrappers are
+thread-safe, and the wrapped function always runs outside their lock.
 
-`throttle` runs the function at most once per interval (leading edge): the first
-call runs, and calls inside the interval are skipped and return the last result.
-`trailing=True` also runs the most recent skipped call when the interval closes,
-so the final value is not lost; it shares the same `flush`, `cancel`, `pending`
-and `result`, plus `reset()` to clear the window.
+## How the edges work
 
-Both decorators are thread-safe. Both take an injectable dependency so tests run
-without real waits: `throttle(interval, clock=...)` and
-`debounce(wait, timer_factory=...)`.
+| Call | Runs |
+| --- | --- |
+| `debounce(w)` | once, `w` seconds after the last call of a burst, with that call's arguments |
+| `debounce(w, leading=True, trailing=False)` | on the first call of a burst; a burst ends after `w` seconds without calls |
+| `debounce(w, leading=True)` | on the first call, and again at the end only if more calls came |
+| `debounce(w, max_wait=m)` | as above, and during an unbroken burst at most `m` seconds after the burst began or after the last run |
+| `throttle(i)` | the first call, then the first call after each `i`-second window |
+| `throttle(i, trailing=True)` | as above, and the last call made inside a window runs when that window closes |
 
-```python
-class FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-clock = FakeClock()
-
-
-@throttle(1.0, clock=clock)
-def tick() -> int:
-    return 1
-
-
-assert tick() == 1  # first call runs
-clock.now = 0.5
-assert tick() == 1  # skipped, returns the last result, no real sleep
-```
+These rules are checked against lodash 4.18.1 and Underscore 1.13.8 on 1200 seeded
+call patterns, run live on a virtual clock. On plain calls the only differences are
+two places where lodash runs a call later than its own deadline, or twice inside one
+throttle interval; `flush()` and `cancel()` also differ by design. The
+[guide](https://github.com/JaviLianes8/throttlebounce/blob/main/GUIDE.md#differences-from-lodash)
+has the details.
 
 ## Async
-
-`async_debounce` and `async_throttle` wrap coroutine functions and schedule runs
-on the running event loop, mirroring the sync options (`leading`, `trailing`,
-`max_wait`). The wrapped call returns `None`; `flush()` is a coroutine.
 
 ```python
 import asyncio
 
 from throttlebounce import async_debounce
 
+sent = []
+
 
 @async_debounce(0.3)
 async def push(value: int) -> None:
-    await send(value)
+    sent.append(value)
 
 
 async def main() -> None:
     push(1)
     push(2)
-    await asyncio.sleep(0.4)  # only 2 is sent
+    await push.flush()
+
+
+asyncio.run(main())
+assert sent == [2]
+```
+
+## Methods
+
+A decorated method keeps separate state for each object, so two editors never share
+a pending save:
+
+```python
+from throttlebounce import debounce
+
+
+class Editor:
+    def __init__(self) -> None:
+        self.saved = []
+
+    @debounce(0.5)
+    def save(self, text: str) -> None:
+        self.saved.append(text)
+
+
+a, b = Editor(), Editor()
+a.save("one")
+b.save("two")
+a.save.flush()
+b.save.flush()
+assert (a.saved, b.saved) == (["one"], ["two"])
+```
+
+## Testing without real time
+
+Pass a `clock` to the throttles, a `timer_factory` to `debounce` and
+`throttle(trailing=True)`, and a `scheduler` to the async pair, and drive time by hand:
+
+```python
+from throttlebounce import throttle
+
+now = 0.0
+
+
+@throttle(1.0, clock=lambda: now)
+def tick() -> str:
+    return f"ran at {now}"
+
+
+assert tick() == "ran at 0.0"
+now = 0.5
+assert tick() == "ran at 0.0"  # skipped
+now = 1.0
+assert tick() == "ran at 1.0"
 ```
 
 ## Command line
 
-The `throttlebounce` command debounces or throttles a shell command driven by
-trigger lines on standard input, the job tools like `entr` do internally. Each
-line is one trigger; its content is ignored.
+Each line on standard input is a trigger; the command after `--` runs on the chosen
+schedule. When the input ends a pending run happens at once, and the exit status is
+that of the last run.
 
-```
-# Rebuild once edits settle (0.5s of quiet):
-watch-files | throttlebounce debounce --wait 0.5 -- make build
-
-# Deploy at most once every 10 seconds, including the final trigger:
-tail -f events.log | throttlebounce throttle --interval 10 --trailing -- ./deploy.sh
+```console
+$ printf 'a\nb\nc\n' | throttlebounce debounce --wait 0.5 -- python -c "print('rebuilt')"
+rebuilt
 ```
 
-Run `throttlebounce --help` for the full flag list. See [GUIDE.md](GUIDE.md) for a
-deeper tour of edges, `max_wait`, cancel/flush, thread-safety and testing.
+Typical uses: `watch-files | throttlebounce debounce --wait 0.5 -- make build`, or
+`tail -f events.log | throttlebounce throttle --interval 10 --trailing -- ./deploy.sh`.
+Run `throttlebounce --help` for every flag.
 
 ## Why
 
-Python's standard library has no debounce or throttle, the timing helpers that
-JavaScript developers reach for constantly. The packages that exist fall short:
+The standard library has no debounce or throttle. On PyPI, as of October 2026:
 
-- [`throttle`](https://pypi.org/project/throttle/) has not been released since
-  2020 and is effectively abandoned.
-- [`throttler`](https://pypi.org/project/throttler/) is an `asyncio` rate limiter,
-  not a sync decorator, and does not debounce.
-- [`call-throttle`](https://pypi.org/project/call-throttle/) throttles but has no
-  debounce.
-- [`python-debouncer`](https://pypi.org/project/python-debouncer/) debounces but
-  pulls in a runtime dependency and has not been touched since 2024.
+- [`throttle`](https://pypi.org/project/throttle/) last released in January 2020.
+- [`python-debouncer`](https://pypi.org/project/python-debouncer/) needs
+  `python-immutable` at runtime and last released in July 2024.
+- [`throttler`](https://pypi.org/project/throttler/),
+  [`asyncio-throttle`](https://pypi.org/project/asyncio-throttle/) and
+  [`call-throttle`](https://pypi.org/project/call-throttle/) throttle or rate-limit
+  calls; none of them debounces.
 
-None of them offer a clean, maintained, typed, zero-dependency pair of sync and
-async `debounce` and `throttle` decorators that are thread-safe and testable
-without real time. That is the gap this fills. Reach for it in desktop apps, CLIs,
-background workers, GUIs and asyncio services: anywhere a function is triggered
-more often than you want it to run.
+throttlebounce puts both in one small typed package, sync and async, with leading
+and trailing edges and `max_wait` that behave as in lodash and Underscore (and a test
+suite that runs those libraries to prove it), per-instance methods, and time you can
+inject.
+
+## Documentation
+
+- [Guide](https://github.com/JaviLianes8/throttlebounce/blob/main/GUIDE.md): every
+  option, the control methods, threads, async, testing, the command line, and the
+  differences from lodash.
+- [Changelog](https://github.com/JaviLianes8/throttlebounce/blob/main/CHANGELOG.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/JaviLianes8/throttlebounce/blob/main/LICENSE).
 
 ## Links
 

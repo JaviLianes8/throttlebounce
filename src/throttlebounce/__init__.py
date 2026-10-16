@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from ._async_debounce import AsyncDebounced, Scheduler, async_debounce
+from ._async_debounce import AsyncDebounced, async_debounce
 from ._async_throttle import AsyncThrottled, async_throttle
-from ._debounce import Debounced, TimerFactory, debounce
-from ._throttle import Clock, Throttled, throttle
+from ._debounce import Debounced, debounce
+from ._throttle import Throttled, throttle
+from ._types import Clock, Scheduler, TimerFactory
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "AsyncDebounced",
@@ -22,3 +23,8 @@ __all__ = [
     "debounce",
     "throttle",
 ]
+
+# Report the public names as living here, where users import them from.
+for _name in __all__:
+    globals()[_name].__module__ = __name__
+del _name

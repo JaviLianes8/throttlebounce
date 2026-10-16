@@ -2,7 +2,10 @@
 $ErrorActionPreference = "Stop"
 
 ruff format --check .
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ruff check .
-mypy --strict src
-mypy tests
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+mypy --strict src tests
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
 pytest
+exit $LASTEXITCODE

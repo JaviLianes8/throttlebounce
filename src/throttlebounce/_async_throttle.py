@@ -1,4 +1,4 @@
-"""Async throttle: run a coroutine at most once per interval, chosen edges."""
+"""Async throttle: run a coroutine at most once per interval, on the chosen edges."""
 
 from __future__ import annotations
 
@@ -6,22 +6,36 @@ import asyncio
 import functools
 import time
 from collections.abc import Awaitable, Callable
-from typing import Generic, ParamSpec, TypeVar
+from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
-from ._async_debounce import Scheduler, _default_scheduler, _Handle
-from ._throttle import Clock
+from ._async_debounce import Runs, _default_scheduler
+from ._bind import Bindable, wrap
+from ._edges import ThrottleEdges, _Slot
+from ._types import Clock, Scheduler, seconds
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S")
+_Q = ParamSpec("_Q")
 
 
-class AsyncThrottled(Generic[_P, _R]):
-    """A coroutine wrapper that throttles runs on an asyncio event loop.
+class AsyncThrottled(Bindable, Generic[_P, _R]):
+    """A coroutine wrapper that throttles on the running event loop; see :func:`async_throttle`.
 
-    Must be called while an event loop is running. The first call runs at once
-    (leading edge); with ``trailing`` on, the most recent call during a busy
-    interval runs when the interval closes. The wrapped call returns None; read
-    the latest value through ``result`` or await ``flush``.
+    Calling it returns None and must happen while a loop runs: each run is a task on
+    that loop. Not thread-safe; use it from the loop's thread.
+
+    >>> import asyncio
+    >>> from throttlebounce import async_throttle
+    >>> @async_throttle(60.0, trailing=True)
+    ... async def show(n: int) -> int:
+    ...     return n
+    >>> async def main() -> tuple[int | None, int | None]:
+    ...     show(1); show(2); show(3)
+    ...     await asyncio.sleep(0)
+    ...     return show.result, await show.flush()
+    >>> asyncio.run(main())
+    (1, 3)
     """
 
     def __init__(
@@ -29,85 +43,75 @@ class AsyncThrottled(Generic[_P, _R]):
         func: Callable[_P, Awaitable[_R]],
         interval: float,
         *,
-        trailing: bool,
-        clock: Clock,
-        scheduler: Scheduler,
+        trailing: bool = False,
+        clock: Clock = time.monotonic,
+        scheduler: Scheduler = _default_scheduler,
     ) -> None:
+        interval = seconds("interval", interval)
+        wrap(self, func)
         self._func = func
-        self._interval = interval
-        self._trailing = trailing
+        self._settings = (interval, bool(trailing), clock, scheduler)
         self._clock = clock
-        self._schedule = scheduler
-        self._last: float | None = None
-        self._handle: _Handle | None = None
-        self._pending: functools.partial[Awaitable[_R]] | None = None
-        self._task: asyncio.Future[None] | None = None
-        self._result: _R | None = None
-        functools.update_wrapper(self, func)
+        self._runs: Runs[_R] = Runs()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._edges: ThrottleEdges[functools.partial[Awaitable[_R]]] = ThrottleEdges(
+            interval, trailing=bool(trailing), new_timer=scheduler, fire=self._fire
+        )
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
+        loop = asyncio.get_running_loop()  # no running loop: RuntimeError, state untouched
+        if loop is not self._loop:
+            # Timers of a previous loop died with it: what they held is dropped.
+            self._edges.cancel()
+            self._loop = loop
         call = functools.partial(self._func, *args, **kwargs)
-        now = self._clock()
-        if self._last is None or now - self._last >= self._interval:
-            self._last = now
-            self._pending = None
-            if self._handle is not None:
-                self._handle.cancel()
-                self._handle = None
-            self._spawn(call)
-        elif self._trailing:
-            self._pending = call
-            if self._handle is None:
-                remaining = self._interval - (now - self._last)
-                self._handle = self._schedule(remaining, self._on_trailing)
+        run = self._edges.call(call, self._clock())
+        if run is not None:
+            self._runs.spawn(run)
 
-    def _spawn(self, call: functools.partial[Awaitable[_R]]) -> None:
-        self._task = asyncio.ensure_future(self._run(call()))
-
-    async def _run(self, awaitable: Awaitable[_R]) -> None:
-        self._result = await awaitable
-
-    def _on_trailing(self) -> None:
-        call = self._pending
-        self._pending = None
-        self._handle = None
-        if call is not None:
-            self._last = self._clock()
-            self._spawn(call)
+    def _fire(self, slot: _Slot) -> None:
+        run = self._edges.expire(slot, self._clock())
+        if run is not None:
+            self._runs.spawn(run)
 
     def cancel(self) -> None:
-        """Drop any pending trailing call so it will never run."""
-        if self._handle is not None:
-            self._handle.cancel()
-            self._handle = None
-        self._pending = None
+        """Drop the pending trailing call, if any; the current window stays."""
+        self._edges.cancel()
 
     async def flush(self) -> _R | None:
-        """Run any pending trailing call now and return its result, else None."""
-        call = self._pending
-        self._pending = None
-        if self._handle is not None:
-            self._handle.cancel()
-            self._handle = None
-        if call is None:
-            return None
-        self._last = self._clock()
-        self._result = await call()
-        return self._result
+        """Run the pending trailing call now, await it and return its result; None if none.
+
+        The run counts as the start of a new window.
+        """
+        run = self._edges.take(self._clock())
+        return None if run is None else await self._runs.now(run)
 
     def reset(self) -> None:
-        """Forget the last run so the next call fires immediately."""
-        self._last = None
+        """Forget the last run, so the next call runs at once."""
+        self._edges.reset()
 
     @property
     def pending(self) -> bool:
-        """Whether a trailing call is waiting to run."""
-        return self._pending is not None
+        """Whether a trailing call is waiting for the window to close."""
+        return self._edges.pending
 
     @property
     def result(self) -> _R | None:
-        """The most recent result produced, or None before the first run."""
-        return self._result
+        """What the most recently finished run returned, or None before any finished."""
+        return self._runs.result
+
+    def _rebuild(self, func: Callable[..., Any]) -> AsyncThrottled[..., _R]:
+        interval, trailing, clock, scheduler = self._settings
+        return AsyncThrottled(func, interval, trailing=trailing, clock=clock, scheduler=scheduler)
+
+    @overload
+    def __get__(self, obj: None, objtype: type | None = None) -> AsyncThrottled[_P, _R]: ...
+    @overload
+    def __get__(
+        self: AsyncThrottled[Concatenate[_S, _Q], _R], obj: _S, objtype: type | None = None
+    ) -> AsyncThrottled[_Q, _R]: ...
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        return self if obj is None else self._bind_to(obj)
 
 
 def async_throttle(
@@ -119,21 +123,23 @@ def async_throttle(
 ) -> Callable[[Callable[_P, Awaitable[_R]]], AsyncThrottled[_P, _R]]:
     """Return a decorator that throttles a coroutine function.
 
-    Mirrors :func:`throttlebounce.throttle` for asyncio: the first call runs at
-    once, calls within ``interval`` are skipped, and ``trailing=True`` runs the
-    most recent skipped call when the interval closes. The wrapped call returns
-    None; await ``flush`` to force the pending run.
+    The same windows, ``trailing`` edge and errors as :func:`throttlebounce.throttle`,
+    scheduled on the running event loop with no threads.
+
+    >>> import asyncio
+    >>> @async_throttle(60.0)
+    ... async def beat(n: int) -> int:
+    ...     return n
+    >>> async def main() -> int | None:
+    ...     beat(1); beat(2)
+    ...     await asyncio.sleep(0)
+    ...     return beat.result
+    >>> asyncio.run(main())
+    1
     """
-    if interval < 0:
-        raise ValueError("interval must be non-negative")
+    seconds("interval", interval)
 
     def decorator(func: Callable[_P, Awaitable[_R]]) -> AsyncThrottled[_P, _R]:
-        return AsyncThrottled(
-            func,
-            interval,
-            trailing=trailing,
-            clock=clock,
-            scheduler=scheduler,
-        )
+        return AsyncThrottled(func, interval, trailing=trailing, clock=clock, scheduler=scheduler)
 
     return decorator
