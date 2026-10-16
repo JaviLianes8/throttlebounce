@@ -27,6 +27,7 @@ class Editor:
     def __init__(self, name: str) -> None:
         self.name = name
         self.saved: list[str] = []
+        self.pings = 0
 
     @debounce(1, timer_factory=SPY)
     def save(self, text: str) -> str:
@@ -35,7 +36,8 @@ class Editor:
 
     @throttle(1, clock=CLOCK)
     def ping(self) -> str:
-        return self.name
+        self.pings += 1
+        return f"{self.name}{self.pings}"
 
     @async_debounce(1, scheduler=SCHEDULER)
     async def push(self, value: int) -> int:
@@ -67,9 +69,11 @@ def test_each_instance_keeps_its_own_pending_call() -> None:
 
 def test_each_instance_has_its_own_throttle_window() -> None:
     first, second = Editor("a"), Editor("b")
-    assert first.ping() == "a"
-    assert second.ping() == "b"
-    assert first.ping() == "a"
+    assert first.ping() == "a1"
+    assert second.ping() == "b1"
+    assert first.ping() == "a1"
+    CLOCK.advance(1)  # the bound wrappers read the injected clock too
+    assert first.ping() == "a2"
 
 
 def test_async_methods_bind_per_instance() -> None:
@@ -107,3 +111,17 @@ def test_a_wrapper_assigned_after_class_creation_binds_by_its_function_name() ->
     late = Late()
     assert late.tick() == 7  # type: ignore[attr-defined]
     assert "tick" in vars(late)
+
+
+def test_two_attributes_wrapping_one_function_stay_separate() -> None:
+    def touch(self: object) -> str:
+        return "touched"
+
+    class Panel:
+        quiet = debounce(1, timer_factory=SPY)(touch)
+        limited = throttle(1, clock=CLOCK)(touch)
+
+    panel = Panel()
+    assert isinstance(panel.quiet, Debounced)
+    assert isinstance(panel.limited, Throttled)
+    assert panel.limited() == "touched"
