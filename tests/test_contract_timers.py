@@ -87,3 +87,8 @@ def test_nothing_stays_scheduled_once_a_burst_ends() -> None:
     gate(5)
     time.advance(20)
     assert time.queued() == 0
+    gate(6)
+    gate(7)
+    assert time.queued() == 1
+    gate.flush()
+    assert time.queued() == 0
