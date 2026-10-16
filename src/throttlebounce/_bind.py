@@ -17,7 +17,7 @@ def wrap(wrapper: object, func: object) -> None:
     functools.update_wrapper(wrapper, func, updated=())  # type: ignore[arg-type]
     names = getattr(func, "__dict__", {})
     for name, value in names.items():
-        if not name.startswith("_") and not hasattr(type(wrapper), name):
+        if isinstance(name, str) and not name.startswith("_") and not hasattr(type(wrapper), name):
             vars(wrapper)[name] = value
 
 
