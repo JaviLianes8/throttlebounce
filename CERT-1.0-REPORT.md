@@ -9,7 +9,7 @@ Progress:
 - [x] Contract, fuzz and author mutation round (items 6, 9, 18)
 - [x] Docs: README, GUIDE, CHANGELOG (items 11, 12)
 - [x] Packaging, e2e and upgrade from PyPI 0.1.0 (items 8, 10, 13, 14), author run
-- [ ] Five QA lenses report PASS (item 19)
+- [x] Five QA lenses report PASS (item 19)
 - [ ] Independent reviewer reports PASS (item 16)
 - [ ] Gates (item 15), final run
 - [ ] PR and trace guard CLEAN (item 17); merge and publish left to the maintainer
@@ -190,3 +190,32 @@ Mutation 8 first produced a syntax error and was rewritten as `elif True:`.
   after: the trailing debounce, the throttle and their results are identical; exported
   names 6 then 11; NaN, infinity, `True` and 1e7 seconds accepted then refused
   (`ValueError`, `TypeError`); a decorated method `TypeError` then works.
+
+## Independent QA lenses (item 19)
+
+Each lens was a fresh reviewer that read the certification rules and CERT-1.0.md first,
+ran the code rather than only reading it, reported only to the author and posted nothing
+to GitHub. Lenses ran one at a time. Findings were fixed, pinned by tests where they
+concern behaviour, and confirmed by the same reviewer; later rounds were bounded to
+confirming earlier findings plus one sweep of the code changed since.
+
+| Lens | Round | Head | Verdict | Findings and outcome |
+| --- | --- | --- | --- | --- |
+| a. API and docs | 1 | c23cf41 | FAIL | decorated methods lost their argument types for type checkers; async wrappers without a running loop failed differently per Python version and left state behind; failing timed async runs only produced a "never retrieved" warning; the GUIDE claimed no code change was needed when building `Debounced`/`Throttled` directly by position; README omitted `timer_factory` on throttle. Fixed in a059bac and c53be46 (`Concatenate` overloads and `tests/test_typing.py`, loop check first, loop exception handler, documented break) |
+| a | 2 | c53be46 | PASS | all five confirmed with an external `mypy --strict` client and on 3.11, 3.13 and 3.14.2; every README and GUIDE example reruns |
+| b. Correctness and ground truth | 1 | c53be46 | FAIL (docs) | own harness over lodash 4.18.1, Underscore 1.13.8 and throttle-debounce 5.0.2: 8,406 scenarios, sync and async identical, Underscore 0 differences, lodash differences on plain calls only the two documented kinds; undocumented: debounce `flush()` ends the burst and throttle `cancel()` keeps the window, unlike lodash and Underscore. Documented in cf9be3e and 24a1704 |
+| b | 2 | cf9be3e | PASS | new text matches its six repros |
+| c. Adversarial and robustness | 1 | 24a1704 | FAIL | a NaN or infinite clock reading froze a throttle; function attributes hid `cancel`/`flush`; the CLI command inherited the trigger stdin and could swallow triggers; Ctrl+C during the final flush gave a traceback; a run a timer had already taken could be lost at end of input; an async wrapper reused on a new loop kept dead timers; subcommand usage text. Fixed in 3dc9242 with contracts |
+| c | 2 | 3dc9242 | FAIL | F1 to F6 confirmed (forced end-of-input race now waits; 80 real subprocess runs, none lost or duplicated); the attribute fix crashed on a non-string `__dict__` key; fixed in ae1bfcb and 3970454 |
+| c | 3 | 3970454 | PASS | 63 hostile `__dict__` keys across three wrappers; over the rounds: 177 duration cases, contention of 16 threads x 2000 calls on 3.13.2 and 3.14.2 free-threaded (GIL off) with no deadlock, lost or duplicated run, about 25 CLI cases, 4 million lines in 2.9 s |
+| d. Packaging and real e2e | 1 | 3970454 | PASS (nits) | wheel and sdist built, `twine check --strict`, contents and metadata as listed above; the wheel on CPython 3.10.19, 3.11.5, 3.12.12, 3.13.2, 3.14.2 and 3.14.2 free-threaded, 501 passed and 1 skipped (the live oracle) on each from the sdist with `src` removed; four sabotages caught; upgrade from PyPI 0.1.0 in place matches the GUIDE. Nits (CONTRIBUTING named a script the sdist does not ship; the upgrade list overstated what was new on debounce) fixed in b12ea6e |
+| e. Contract strength (blind) | 1 | b12ea6e | FAIL | 125 mutations of its own over every module: 97 killed, 8 equivalent, 20 missing contracts (settings of bound copies, async throttle on a new loop and stale handles, async error and cleanup paths, CLI timer tracking, `--leading --no-trailing`, interrupt cancel, overlapping runs, validation limits, flush timing, private attributes, throttle lock) |
+| e | 2 | e750b7e | PASS | the 20 killed by `tests/test_contract_blind.py`, `tests/test_contract_blind_cli.py` and a tighter `test_contract_async` check: 117 killed, 8 equivalent, 0 survivors |
+
+Equivalent mutants recorded by lens e: a non-finite last-run time stored instead of None
+(twice: the window check reads NaN or an infinity as closed either way); the leading
+branch not clearing a pending call that is always None there; `_expired` kept after the
+quiet timer fires or after `end()` (the quiet timer is gone, so the next call opens a
+burst and resets it); a fired deadline slot left set (the later `cancel()` of a fired
+one-shot timer does nothing); throttle `pending` read from "timer is set" (they change
+together); the `bool()` normalisation of the edge flags.
