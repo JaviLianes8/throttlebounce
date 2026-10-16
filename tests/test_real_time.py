@@ -15,18 +15,19 @@ from throttlebounce import async_debounce, async_throttle, debounce, throttle
 _SAFETY = 30.0
 
 
-def test_debounce_runs_on_a_real_timer_thread() -> None:
+def test_debounce_runs_on_a_real_daemon_timer_thread() -> None:
     done = threading.Event()
-    seen: list[tuple[int, bool]] = []
+    seen: list[tuple[int, bool, bool]] = []
 
     @debounce(0.01)
     def record(value: int) -> None:
-        seen.append((value, threading.current_thread() is threading.main_thread()))
+        thread = threading.current_thread()
+        seen.append((value, thread is threading.main_thread(), thread.daemon))
         done.set()
 
     record(1)
     assert done.wait(_SAFETY)
-    assert seen == [(1, False)]
+    assert seen == [(1, False, True)]  # a daemon never keeps the process alive
     assert record.pending is False
 
 
