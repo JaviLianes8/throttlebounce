@@ -287,7 +287,7 @@ One break: the classes `Debounced` and `Throttled`, when built directly, now tak
 everything after the duration by keyword (`Debounced(func, 0.5, timer_factory=f)`,
 `Throttled(func, 1.0, clock=c)`); 0.1.0 also accepted that third argument by position. New
 since then: the `leading`, `trailing` and `max_wait` options, `trailing` on throttle,
-`flush`, `cancel`, `pending` and `result` on every wrapper, the async decorators, the
+`flush`, `cancel` and `pending` on throttles, `result` on every wrapper, the async decorators, the
 command line and per-instance methods. Durations are now checked when the decorator is
 built: NaN, infinities, values beyond `threading.TIMEOUT_MAX` and booleans raise
 `ValueError` or `TypeError`. 0.1.0 accepted them, with broken results: an infinite
