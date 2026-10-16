@@ -54,12 +54,14 @@ def test_a_duration_a_timer_cannot_wait_is_a_value_error(
 
 
 @pytest.mark.parametrize("factory", DECORATORS)
-@pytest.mark.parametrize("bad", ["1", None, True, b"1", 1j, [1]])
+@pytest.mark.parametrize("bad", ["1", None, True, b"1", 1j, [1], "x" * 10_000])
 def test_a_duration_that_is_not_a_real_number_is_a_type_error(
     factory: Callable[..., Any], bad: object
 ) -> None:
-    with pytest.raises(TypeError, match="real number of seconds"):
+    with pytest.raises(TypeError, match="real number of seconds") as caught:
         factory(bad)
+    assert len(str(caught.value)) < 80
+    assert repr(bad) not in str(caught.value)
 
 
 @pytest.mark.parametrize("factory", DECORATORS)
