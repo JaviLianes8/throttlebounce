@@ -71,6 +71,8 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
         scheduler: Scheduler = _default_scheduler,
     ) -> None:
         wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
+        # Copy the metadata first, so attributes of func can never replace our state.
+        functools.update_wrapper(self, func)
         self._func = func
         self._settings = (wait, leading, trailing, max_wait, scheduler)
         self._runs: Runs[_R] = Runs()
@@ -82,7 +84,6 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
             new_timer=scheduler,
             fire=self._fire,
         )
-        functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
         run = self._edges.call(functools.partial(self._func, *args, **kwargs))

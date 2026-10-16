@@ -29,11 +29,13 @@ ORACLE = ROOT / "tests" / "oracle"
 
 
 def _lodash_throttle_trailing(s: dict[str, Any]) -> bool:
-    return s["lib"] == "lodash" and s["kind"] == "throttle" and s["trailing"]
+    return bool(s["lib"] == "lodash" and s["kind"] == "throttle" and s["trailing"])
 
 
 def _lodash_short_deadline(s: dict[str, Any]) -> bool:
-    return s["lib"] == "lodash" and s["max_wait"] is not None and s["max_wait"] < 2 * s["wait"]
+    return bool(s["lib"] == "lodash" and s["max_wait"] is not None) and bool(
+        s["max_wait"] < 2 * s["wait"]
+    )
 
 
 EXACT = [s for s in SCENARIOS if not _lodash_throttle_trailing(s) and not _lodash_short_deadline(s)]

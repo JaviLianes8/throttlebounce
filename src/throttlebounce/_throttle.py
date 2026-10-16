@@ -42,6 +42,8 @@ class Throttled(Bindable, Generic[_P, _R]):
         timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
         interval = seconds("interval", interval)
+        # Copy the metadata first, so attributes of func can never replace our state.
+        functools.update_wrapper(self, func)
         self._func = func
         self._settings = (interval, bool(trailing), clock, timer_factory)
         self._clock = clock
@@ -52,7 +54,6 @@ class Throttled(Bindable, Generic[_P, _R]):
             interval, trailing=bool(trailing), new_timer=self._new_timer, fire=self._fire
         )
         self._result: _R | None = None
-        functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R | None:
         call = functools.partial(self._func, *args, **kwargs)

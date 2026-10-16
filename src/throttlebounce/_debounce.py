@@ -45,6 +45,8 @@ class Debounced(Bindable, Generic[_P, _R]):
         timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
         wait, leading, trailing, max_wait = edge_options(wait, leading, trailing, max_wait)
+        # Copy the metadata first, so attributes of func can never replace our state.
+        functools.update_wrapper(self, func)
         self._func = func
         self._settings = (wait, leading, trailing, max_wait, timer_factory)
         self._factory = timer_factory
@@ -59,7 +61,6 @@ class Debounced(Bindable, Generic[_P, _R]):
             fire=self._fire,
         )
         self._result: _R | None = None
-        functools.update_wrapper(self, func)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
         call = functools.partial(self._func, *args, **kwargs)
