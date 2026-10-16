@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, ParamSpec, TypeVar, overload
+from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
 from ._bind import Bindable
 from ._edges import DebounceEdges, _Slot
@@ -13,6 +13,8 @@ from ._types import Scheduler, _Handle, edge_options
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S")
+_Q = ParamSpec("_Q")
 
 
 def _default_scheduler(delay: float, action: Callable[[], None]) -> _Handle:
@@ -34,7 +36,14 @@ class Runs(Generic[_R]):
         task.add_done_callback(self._tasks.discard)
 
     async def _run(self, call: Callable[[], Awaitable[_R]]) -> None:
-        await self.now(call)
+        try:
+            await self.now(call)
+        except Exception as error:
+            # Nobody awaits a timed run: report its failure the way the loop reports
+            # any unhandled task error, instead of a warning when the task is collected.
+            asyncio.get_running_loop().call_exception_handler(
+                {"message": "throttlebounce run failed", "exception": error}
+            )
 
     async def now(self, call: Callable[[], Awaitable[_R]]) -> _R:
         result = await call()
@@ -86,6 +95,7 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
         )
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
+        asyncio.get_running_loop()  # outside a running loop: RuntimeError, state untouched
         run = self._edges.call(functools.partial(self._func, *args, **kwargs))
         if run is not None:
             self._runs.spawn(run)
@@ -123,8 +133,10 @@ class AsyncDebounced(Bindable, Generic[_P, _R]):
     @overload
     def __get__(self, obj: None, objtype: type | None = None) -> AsyncDebounced[_P, _R]: ...
     @overload
-    def __get__(self, obj: object, objtype: type | None = None) -> AsyncDebounced[..., _R]: ...
-    def __get__(self, obj: object, objtype: type | None = None) -> AsyncDebounced[Any, _R]:
+    def __get__(
+        self: AsyncDebounced[Concatenate[_S, _Q], _R], obj: _S, objtype: type | None = None
+    ) -> AsyncDebounced[_Q, _R]: ...
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         return self if obj is None else self._bind_to(obj)
 
 

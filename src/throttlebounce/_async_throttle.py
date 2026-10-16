@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, ParamSpec, TypeVar, overload
+from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
 from ._async_debounce import Runs, _default_scheduler
 from ._bind import Bindable
@@ -14,6 +15,8 @@ from ._types import Clock, Scheduler, seconds
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S")
+_Q = ParamSpec("_Q")
 
 
 class AsyncThrottled(Bindable, Generic[_P, _R]):
@@ -56,6 +59,7 @@ class AsyncThrottled(Bindable, Generic[_P, _R]):
         )
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
+        asyncio.get_running_loop()  # outside a running loop: RuntimeError, state untouched
         call = functools.partial(self._func, *args, **kwargs)
         run = self._edges.call(call, self._clock())
         if run is not None:
@@ -99,8 +103,10 @@ class AsyncThrottled(Bindable, Generic[_P, _R]):
     @overload
     def __get__(self, obj: None, objtype: type | None = None) -> AsyncThrottled[_P, _R]: ...
     @overload
-    def __get__(self, obj: object, objtype: type | None = None) -> AsyncThrottled[..., _R]: ...
-    def __get__(self, obj: object, objtype: type | None = None) -> AsyncThrottled[Any, _R]:
+    def __get__(
+        self: AsyncThrottled[Concatenate[_S, _Q], _R], obj: _S, objtype: type | None = None
+    ) -> AsyncThrottled[_Q, _R]: ...
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         return self if obj is None else self._bind_to(obj)
 
 

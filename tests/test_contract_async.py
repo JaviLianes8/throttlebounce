@@ -12,13 +12,49 @@ from _fakes import FakeClock, FakeScheduler
 from throttlebounce import async_debounce, async_throttle
 
 
-def test_the_default_scheduler_needs_a_running_loop() -> None:
-    @async_debounce(1)
+def test_calls_outside_a_running_loop_raise_and_change_nothing() -> None:
+    clock, scheduler = FakeClock(), FakeScheduler()
+
+    @async_debounce(1, scheduler=scheduler)
     async def push() -> None:
         pass
 
-    with pytest.raises(RuntimeError):
-        push()
+    @async_throttle(1, clock=clock, scheduler=scheduler)
+    async def beat() -> int:
+        return 1
+
+    for wrapper in (push, beat):
+        with pytest.raises(RuntimeError):
+            wrapper()
+    assert (push.pending, scheduler.handles) == (False, [])
+
+    async def main() -> int | None:
+        beat()  # the failed call above opened no window
+        await asyncio.sleep(0)
+        return beat.result
+
+    assert asyncio.run(main()) == 1
+
+
+def test_a_failing_timed_run_goes_to_the_loop_exception_handler() -> None:
+    async def main() -> list[BaseException]:
+        caught: list[BaseException] = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _, context: caught.append(context["exception"]))
+        scheduler = FakeScheduler()
+
+        @async_debounce(1, scheduler=scheduler)
+        async def fail() -> None:
+            raise KeyError("boom")
+
+        fail()
+        scheduler.handles[-1].fire()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        return caught
+
+    caught = asyncio.run(main())
+    assert [type(error) for error in caught] == [KeyError]
 
 
 def test_a_spawned_run_survives_garbage_collection_until_it_finishes() -> None:

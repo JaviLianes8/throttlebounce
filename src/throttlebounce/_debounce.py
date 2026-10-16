@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import threading
 from collections.abc import Callable
-from typing import Any, Generic, ParamSpec, TypeVar, overload
+from typing import Any, Concatenate, Generic, ParamSpec, TypeVar, overload
 
 from ._bind import Bindable
 from ._edges import DebounceEdges, _Slot
@@ -13,6 +13,8 @@ from ._types import TimerFactory, _default_timer_factory, _Timer, edge_options
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_S = TypeVar("_S")
+_Q = ParamSpec("_Q")
 
 
 class Debounced(Bindable, Generic[_P, _R]):
@@ -132,8 +134,10 @@ class Debounced(Bindable, Generic[_P, _R]):
     @overload
     def __get__(self, obj: None, objtype: type | None = None) -> Debounced[_P, _R]: ...
     @overload
-    def __get__(self, obj: object, objtype: type | None = None) -> Debounced[..., _R]: ...
-    def __get__(self, obj: object, objtype: type | None = None) -> Debounced[Any, _R]:
+    def __get__(
+        self: Debounced[Concatenate[_S, _Q], _R], obj: _S, objtype: type | None = None
+    ) -> Debounced[_Q, _R]: ...
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         return self if obj is None else self._bind_to(obj)
 
 
